@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "processedge_posnext_override"
-version = "0.0.2"
+version = "0.0.3"
 description = "ProcessEdge POSNext overrides for editable price, posting date, and variance reporting on ERPNext v16"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -26,4 +26,4 @@ include = ["processedge_posnext_override*"]
 processedge_posnext_override = ["**/*.json", "**/*.js", "**/*.html", "**/*.css", "**/*.md", "**/*.txt"]
 
 [tool.bench.frappe-dependencies]
-frappe = ">=16.0.0,<17.0.0"
+frappe = ">=16.0.0-dev,<17.0.0"
