@@ -21,7 +21,7 @@ App-level POSNext customizations for ERPNext/Frappe that keep upgrade risk low b
 
 ```bash
 cd /path/to/frappe-bench
-bench get-app https://github.com/olayemigod/Processedge-POSNext-override.git
+bench get-app https://github.com/olayemigod/Processedge-POSNext-Extension.git
 bench --site your-site install-app processedge_posnext_override
 bench --site your-site migrate
 bench build --app processedge_posnext_override
@@ -80,5 +80,5 @@ Use this to review whether POS shortages at a business location are supported by
 
 ## Suggested Repository Metadata
 
-- Repository name: `processedge-posnext-override`
+- Repository name: `Processedge-POSNext-Extension`
 - Description: `ERPNext v16 custom app for POSNext price-edit and posting-date controls without core edits.`
