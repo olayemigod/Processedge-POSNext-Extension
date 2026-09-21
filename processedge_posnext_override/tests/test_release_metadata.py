@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import re
 import tomllib
 from pathlib import Path
 
@@ -15,12 +14,26 @@ def test_release_metadata_is_consistent():
     setup_text = (ROOT / "setup.py").read_text(encoding="utf-8")
 
     project_version = pyproject["project"]["version"]
-    init_match = re.search(r'__version__\\s*=\\s*["\\\']([^"\\\']+)["\\\']', init_text)
-    setup_match = re.search(r'version\\s*=\\s*["\\\']([^"\\\']+)["\\\']', setup_text)
+    init_version = next(
+        (
+            line.split("=", 1)[1].strip().strip("'\\\"")
+            for line in init_text.splitlines()
+            if line.strip().startswith("__version__ =")
+        ),
+        None,
+    )
+    setup_version = next(
+        (
+            line.split("=", 1)[1].strip().rstrip(",").strip("'\\\"")
+            for line in setup_text.splitlines()
+            if line.strip().startswith("version=")
+        ),
+        None,
+    )
 
-    assert init_match, "processedge_posnext_override/__init__.py must declare __version__"
-    assert setup_match, "setup.py must declare version"
-    assert project_version == init_match.group(1) == setup_match.group(1)
+    assert init_version, "processedge_posnext_override/__init__.py must declare __version__"
+    assert setup_version, "setup.py must declare version"
+    assert project_version == init_version == setup_version
 
 
 def test_frappe_v16_dependency_contract():
