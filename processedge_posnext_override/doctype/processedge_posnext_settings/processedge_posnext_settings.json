@@ -8,6 +8,8 @@
   "feature_section",
   "allow_editable_selling_price",
   "allow_editing_posting_date",
+  "permission_section",
+  "protect_erpnext_permissions_from_posnext",
   "role_section",
   "editable_price_roles"
  ],
@@ -30,6 +32,18 @@
    "fieldname": "allow_editing_posting_date",
    "fieldtype": "Check",
    "label": "Allow Editing Posting Date on POS"
+  },
+  {
+   "fieldname": "permission_section",
+   "fieldtype": "Section Break",
+   "label": "ERPNext Permission Compatibility"
+  },
+  {
+   "default": "1",
+   "description": "Preserve ERPNext standard role permissions when POSNext custom permissions are synced. Disable only if this site intentionally manages the complete custom permission matrix for POSNext-affected ERPNext DocTypes.",
+   "fieldname": "protect_erpnext_permissions_from_posnext",
+   "fieldtype": "Check",
+   "label": "Protect ERPNext Permissions from POSNext Overrides"
   },
   {
    "fieldname": "role_section",
