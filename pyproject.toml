@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "processedge_posnext_override"
-version = "0.0.1"
+version = "0.0.2"
 description = "ProcessEdge POSNext overrides for editable price, posting date, and variance reporting on ERPNext v16"
 readme = "README.md"
 requires-python = ">=3.10"
