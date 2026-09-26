@@ -718,6 +718,9 @@
 
     payload.posting_date = STATE.postingDate;
     payload.transaction_date = STATE.postingDate;
+    if (!payload.doctype || payload.doctype === "Sales Invoice") {
+      payload.set_posting_time = 1;
+    }
     return payload;
   }
 
