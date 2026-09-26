@@ -171,3 +171,5 @@ def test_posting_date_request_helper_is_defined():
     assert caller > helper
     assert "payload.posting_date = STATE.postingDate" in js
     assert "payload.transaction_date = STATE.postingDate" in js
+    assert 'payload.doctype === "Sales Invoice"' in js
+    assert "payload.set_posting_time = 1" in js
