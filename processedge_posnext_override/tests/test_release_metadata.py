@@ -123,3 +123,34 @@ def test_pos_runtime_requests_are_isolated_and_vite_compatible():
     # wrapper may only transform the three invoice endpoints above.
     assert "function parseBody(body)" not in js
     assert "patchRequestPayload(url, init)" in js
+
+
+def test_pos_ui_and_posting_date_governance_contract():
+    api = (ROOT / "processedge_posnext_override" / "api.py").read_text(encoding="utf-8")
+    pos_settings = (
+        ROOT / "processedge_posnext_override" / "overrides" / "pos_settings.py"
+    ).read_text(encoding="utf-8")
+    sales_invoice = (
+        ROOT / "processedge_posnext_override" / "overrides" / "sales_invoice.py"
+    ).read_text(encoding="utf-8")
+    js = (
+        ROOT
+        / "processedge_posnext_override"
+        / "public"
+        / "js"
+        / "processedge_posnext_override.js"
+    ).read_text(encoding="utf-8")
+
+    assert "get_effective_posting_date_editability" in pos_settings
+    assert "allow_change_posting_date" in pos_settings
+    assert "get_effective_posting_date_editability(pos_profile=pos_profile)" in api
+    assert "get_effective_posting_date_editability(" in sales_invoice
+
+    assert "data-processedge-posting-date-global" in js
+    assert "createPostingDateHeaderField" in js
+    assert "button[title='POS Next']" in js
+    assert "processedge.cashierExpenseFloatingPosition" in js
+    assert "pointerdown" in js
+    assert "pointermove" in js
+    assert "touch-action:none" in js
+    assert "M7 3h10a2 2 0 012 2v16" in js
