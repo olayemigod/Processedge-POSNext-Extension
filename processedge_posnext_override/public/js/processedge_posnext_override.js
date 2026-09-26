@@ -24,20 +24,101 @@
     return new Date().toISOString().slice(0, 10);
   }
 
-  function callAPI(method, args) {
-    return new Promise((resolve, reject) => {
-      if (!window.frappe || !window.frappe.call) {
-        reject(new Error("frappe.call is unavailable"));
-        return;
-      }
+  const CSRF_TOKEN_ENDPOINT = "/api/method/pos_next.api.utilities.get_csrf_token";
+  const WRITE_METHODS = new Set([
+    "processedge_posnext_override.api.create_retailedge_cashier_expense",
+  ]);
 
-      window.frappe.call({
-        method,
-        args: args || {},
-        callback: (r) => resolve(r.message || r),
-        error: reject,
-      });
+  function apiArgs(args) {
+    const params = new URLSearchParams();
+    Object.entries(args || {}).forEach(([key, value]) => {
+      if (value === undefined || value === null) return;
+      params.set(key, typeof value === "object" ? JSON.stringify(value) : String(value));
     });
+    return params;
+  }
+
+  async function parseAPIResponse(response) {
+    const contentType = response.headers.get("content-type") || "";
+    let payload = null;
+    if (contentType.includes("application/json")) {
+      try {
+        payload = await response.json();
+      } catch (_error) {
+        payload = null;
+      }
+    }
+
+    if (!response.ok) {
+      const message =
+        (payload && (payload.exception || payload._error_message || payload.message)) ||
+        `Request failed with status ${response.status}`;
+      throw new Error(typeof message === "string" ? message : JSON.stringify(message));
+    }
+
+    return payload && Object.prototype.hasOwnProperty.call(payload, "message")
+      ? payload.message
+      : payload;
+  }
+
+  function validCSRFToken(token) {
+    return typeof token === "string" && token && token !== "{{ csrf_token }}";
+  }
+
+  async function ensureCSRFToken() {
+    if (validCSRFToken(window.csrf_token)) {
+      return window.csrf_token;
+    }
+
+    const response = await window.fetch(CSRF_TOKEN_ENDPOINT, {
+      method: "GET",
+      credentials: "include",
+      cache: "no-store",
+      headers: {
+        Accept: "application/json",
+        "X-Frappe-Site-Name": window.location.hostname,
+      },
+    });
+    const data = await parseAPIResponse(response);
+    const token = data && data.csrf_token ? data.csrf_token : null;
+    if (!validCSRFToken(token)) {
+      throw new Error("Unable to obtain a CSRF token for the ProcessEdge POS bridge.");
+    }
+    window.csrf_token = token;
+    return token;
+  }
+
+  async function callAPI(method, args) {
+    const endpoint = `/api/method/${method}`;
+    const params = apiArgs(args);
+
+    if (!WRITE_METHODS.has(method)) {
+      const query = params.toString();
+      const response = await window.fetch(query ? `${endpoint}?${query}` : endpoint, {
+        method: "GET",
+        credentials: "include",
+        cache: "no-store",
+        headers: {
+          Accept: "application/json",
+          "X-Frappe-Site-Name": window.location.hostname,
+        },
+      });
+      return parseAPIResponse(response);
+    }
+
+    const csrfToken = await ensureCSRFToken();
+    const response = await window.fetch(endpoint, {
+      method: "POST",
+      credentials: "include",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+        "X-Frappe-CSRF-Token": csrfToken,
+        "X-Frappe-Site-Name": window.location.hostname,
+      },
+      body: params.toString(),
+    });
+    return parseAPIResponse(response);
   }
 
   async function loadSettings() {
@@ -487,93 +568,148 @@
     document.body.appendChild(overlay);
   }
 
-  function parseBody(body) {
-    if (!body) return null;
+  const INVOICE_PATCH_FIELDS = [
+    ["pos_next.api.invoices.update_invoice", "data"],
+    ["pos_next.api.invoices.submit_invoice", "invoice"],
+    ["pos_next.api.invoices.apply_offers", "invoice_data"],
+  ];
 
-    if (typeof body === "string") {
-      return new URLSearchParams(body);
-    }
-
-    if (body instanceof URLSearchParams) {
-      return new URLSearchParams(body.toString());
-    }
-
-    if (body instanceof FormData) {
-      const params = new URLSearchParams();
-      body.forEach((value, key) => params.set(key, value));
-      return params;
-    }
-
-    return null;
+  function invoicePatchField(url) {
+    const match = INVOICE_PATCH_FIELDS.find(([endpoint]) => url.includes(endpoint));
+    return match ? match[1] : null;
   }
 
-  function writeInvoiceDateFields(payload) {
-    if (!payload || !STATE.settings || !STATE.settings.allow_editing_posting_date || !STATE.postingDate) {
-      return payload;
+  function getHeaderValue(headers, name) {
+    if (!headers) return "";
+    if (typeof Headers !== "undefined" && headers instanceof Headers) {
+      return headers.get(name) || "";
+    }
+    const target = name.toLowerCase();
+    const key = Object.keys(headers).find((item) => item.toLowerCase() === target);
+    return key ? String(headers[key] || "") : "";
+  }
+
+  function patchContainerField(container, field) {
+    if (!container || !Object.prototype.hasOwnProperty.call(container, field)) {
+      return false;
     }
 
-    payload.posting_date = STATE.postingDate;
-    payload.transaction_date = STATE.postingDate;
-    return payload;
+    const raw = container[field];
+    if (raw === undefined || raw === null || raw === "") {
+      return false;
+    }
+
+    let payload = raw;
+    let serialized = false;
+    if (typeof raw === "string") {
+      try {
+        payload = JSON.parse(raw);
+        serialized = true;
+      } catch (_error) {
+        return false;
+      }
+    }
+
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+      return false;
+    }
+
+    writeInvoiceDateFields(payload);
+    container[field] = serialized ? JSON.stringify(payload) : payload;
+    return true;
   }
 
   function patchRequestPayload(url, init) {
-    const params = parseBody(init && init.body);
-    if (!params) {
+    const field = invoicePatchField(url || "");
+    if (!field || !init || !init.body) {
       return init;
     }
 
-    if (url.includes("pos_next.api.invoices.update_invoice")) {
-      const raw = params.get("data");
-      if (raw) {
-        const data = JSON.parse(raw);
-        writeInvoiceDateFields(data);
-        params.set("data", JSON.stringify(data));
-      }
+    const body = init.body;
+
+    if (typeof URLSearchParams !== "undefined" && body instanceof URLSearchParams) {
+      const params = new URLSearchParams(body.toString());
+      const raw = params.get(field);
+      if (!raw) return init;
+      const holder = { [field]: raw };
+      if (!patchContainerField(holder, field)) return init;
+      params.set(field, holder[field]);
+      return Object.assign({}, init, { body: params });
     }
 
-    if (url.includes("pos_next.api.invoices.submit_invoice")) {
-      const invoiceRaw = params.get("invoice");
-      if (invoiceRaw) {
-        const invoice = JSON.parse(invoiceRaw);
-        writeInvoiceDateFields(invoice);
-        params.set("invoice", JSON.stringify(invoice));
-      }
+    if (typeof FormData !== "undefined" && body instanceof FormData) {
+      const form = new FormData();
+      body.forEach((value, key) => form.append(key, value));
+      const raw = form.get(field);
+      if (typeof raw !== "string" || !raw) return init;
+      const holder = { [field]: raw };
+      if (!patchContainerField(holder, field)) return init;
+      form.set(field, holder[field]);
+      return Object.assign({}, init, { body: form });
     }
 
-    if (url.includes("pos_next.api.invoices.apply_offers")) {
-      const invoiceDataRaw = params.get("invoice_data");
-      if (invoiceDataRaw) {
-        const invoiceData = JSON.parse(invoiceDataRaw);
-        writeInvoiceDateFields(invoiceData);
-        params.set("invoice_data", JSON.stringify(invoiceData));
-      }
+    if (typeof body !== "string") {
+      return init;
     }
 
-    const nextInit = Object.assign({}, init || {});
-    nextInit.body = params.toString();
-    nextInit.headers = Object.assign({}, (init && init.headers) || {});
-    if (!nextInit.headers["Content-Type"] && !nextInit.headers["content-type"]) {
+    const contentType = getHeaderValue(init.headers, "Content-Type").toLowerCase();
+    const trimmed = body.trim();
+    if (contentType.includes("application/json") || trimmed.startsWith("{")) {
+      let jsonBody;
+      try {
+        jsonBody = JSON.parse(body);
+      } catch (_error) {
+        return init;
+      }
+      if (!jsonBody || typeof jsonBody !== "object" || Array.isArray(jsonBody)) {
+        return init;
+      }
+      if (!patchContainerField(jsonBody, field)) {
+        return init;
+      }
+      return Object.assign({}, init, { body: JSON.stringify(jsonBody) });
+    }
+
+    const params = new URLSearchParams(body);
+    const raw = params.get(field);
+    if (!raw) {
+      return init;
+    }
+    const holder = { [field]: raw };
+    if (!patchContainerField(holder, field)) {
+      return init;
+    }
+    params.set(field, holder[field]);
+
+    const nextInit = Object.assign({}, init, { body: params.toString() });
+    nextInit.headers = Object.assign({}, init.headers || {});
+    if (!getHeaderValue(nextInit.headers, "Content-Type")) {
       nextInit.headers["Content-Type"] = "application/x-www-form-urlencoded; charset=UTF-8";
     }
     return nextInit;
   }
 
   function patchFetch() {
-    if (!window.fetch || window.fetch.__processedgePosnextPatched) {
+    if (
+      !window.fetch ||
+      window.fetch.__processedgePosnextPatched ||
+      !STATE.settings ||
+      !STATE.settings.allow_editing_posting_date
+    ) {
       return;
     }
 
     const originalFetch = window.fetch.bind(window);
     const patched = function (input, init) {
       const url = typeof input === "string" ? input : input && input.url;
-      if (url && isPOSPage()) {
+      if (url && isPOSPage() && invoicePatchField(url)) {
         init = patchRequestPayload(url, init);
       }
       return originalFetch(input, init);
     };
 
     patched.__processedgePosnextPatched = true;
+    patched.__processedgePosnextOriginal = originalFetch;
     window.fetch = patched;
   }
 
