@@ -39,7 +39,7 @@ jobs:
         run: node --check processedge_posnext_override/public/js/processedge_posnext_override.js
 
       - name: Validate release metadata
-        run: python -m pytest -q processedge_posnext_override/tests/test_release_metadata.py
+        run: python -m pytest -q processedge_posnext_override/tests/test_release_metadata.py processedge_posnext_override/tests/test_pos_page_injection.py
 
       - name: Build Python package
         run: python -m build

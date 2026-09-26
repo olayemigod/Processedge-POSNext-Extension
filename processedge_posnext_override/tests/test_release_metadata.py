@@ -82,3 +82,15 @@ def test_retailedge_cashier_expense_bridge_is_optional_and_governed():
     assert "doc.branch =" not in js
     assert "doc.payment_account =" not in js
 
+
+
+def test_pos_vite_page_injection_contract():
+    hooks = (ROOT / "processedge_posnext_override" / "hooks.py").read_text(encoding="utf-8")
+    request_hooks = (ROOT / "processedge_posnext_override" / "request_hooks.py").read_text(encoding="utf-8")
+
+    assert 'after_request = ["processedge_posnext_override.request_hooks.inject_pos_page_script"]' in hooks
+    assert '"/assets/processedge_posnext_override/js/processedge_posnext_override.js"' in request_hooks
+    assert 'path == "/pos" or path.startswith("/pos/")' in request_hooks
+    assert '"text/html"' in request_hooks
+    assert "response.get_data(as_text=True)" in request_hooks
+    assert "response.set_data(html)" in request_hooks
