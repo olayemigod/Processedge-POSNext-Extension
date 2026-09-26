@@ -7,6 +7,7 @@ from processedge_posnext_override.overrides.pos_settings import (
     get_effective_posting_date_editability,
     get_effective_rate_editability,
     get_app_settings_doc,
+    posnext_supports_customer_phone_policy,
 )
 
 
@@ -27,6 +28,7 @@ def get_pos_override_settings(pos_profile=None):
             get_effective_posting_date_editability(pos_profile=pos_profile)
         ),
         "require_customer_phone": int(require_customer_phone),
+        "native_customer_phone_policy": int(posnext_supports_customer_phone_policy()),
         "editable_price_roles": roles,
         "pos_profile": pos_profile,
         "posting_date": frappe.utils.nowdate(),
