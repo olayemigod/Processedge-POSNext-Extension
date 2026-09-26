@@ -211,12 +211,17 @@ def test_optional_customer_phone_runtime_contract():
 
     assert '"require_customer_phone": int(require_customer_phone)' in api
     assert '"native_customer_phone_policy": int(posnext_supports_customer_phone_policy())' in api
+    assert '"customer_phone_policy_source": get_customer_phone_policy_source()' in api
+    assert '"posnext_require_customer_phone": native_phone_policy' in api
+    assert '"processedge_fallback_require_customer_phone": int(fallback_phone_policy)' in api
     assert "pos_next_bootstrap_settings" in hooks
     assert "extend_bootstrap_settings" in hooks
     assert "posnext_supports_customer_phone_policy" in pos_settings
-    assert 'fields.append("require_customer_phone")' in pos_settings
-    assert 'updates["require_customer_phone"] = flags["require_customer_phone"]' in pos_settings
-    assert 'settings["require_customer_phone"] = flags["require_customer_phone"]' in pos_settings
+    assert "get_effective_customer_phone_requirement" in pos_settings
+    assert 'return "pos_next" if posnext_supports_customer_phone_policy() else "processedge_fallback"' in pos_settings
+    assert 'updates["require_customer_phone"]' not in pos_settings
+    assert 'doc.require_customer_phone =' not in pos_settings
+    assert 'if not posnext_supports_customer_phone_policy()' in pos_settings
     assert '"pos_next.api.customers.create_customer"' in js
     assert "data-processedge-create-customer-without-phone" in js
     assert "native_customer_phone_policy" in js
