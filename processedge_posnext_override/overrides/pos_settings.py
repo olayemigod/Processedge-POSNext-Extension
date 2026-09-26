@@ -160,7 +160,6 @@ def get_pos_settings_override(pos_profile):
     if not settings:
         settings = {}
 
-    flags = get_app_flags()
     pos_settings_doc = get_pos_settings_doc(pos_profile)
     settings["allow_user_to_edit_rate"] = get_effective_rate_editability(
         pos_profile=pos_profile,
