@@ -27,6 +27,7 @@
   const CSRF_TOKEN_ENDPOINT = "/api/method/pos_next.api.utilities.get_csrf_token";
   const WRITE_METHODS = new Set([
     "processedge_posnext_override.api.create_retailedge_cashier_expense",
+    "pos_next.api.customers.create_customer",
   ]);
 
   function apiArgs(args) {
@@ -131,6 +132,7 @@
       STATE.settings = {
         allow_editable_selling_price: 0,
         allow_editing_posting_date: 0,
+        require_customer_phone: 1,
       };
       STATE.postingDate = getToday();
     }
@@ -1076,7 +1078,174 @@
     });
   }
 
+  function normalizedLabelText(value) {
+    return String(value || "").replace(/\\*/g, "").trim();
+  }
+
+  function findDialogField(dialog, labelText) {
+    if (!dialog) return null;
+    const label = Array.from(dialog.querySelectorAll("label")).find(
+      (item) => normalizedLabelText(item.textContent) === labelText
+    );
+    if (!label) return null;
+
+    const forId = label.getAttribute("for");
+    if (forId) {
+      const escaped = window.CSS && typeof window.CSS.escape === "function" ? window.CSS.escape(forId) : forId;
+      const byId = dialog.querySelector("#" + escaped);
+      if (byId) return byId;
+    }
+
+    const container = label.parentElement;
+    return container ? container.querySelector("input:not([type='hidden']), select, textarea") : null;
+  }
+
+  function fieldValue(dialog, labelText) {
+    const control = findDialogField(dialog, labelText);
+    return control && typeof control.value === "string" ? control.value.trim() : "";
+  }
+
+  function findVueComponentInstance(element, componentName) {
+    let node = element;
+    while (node) {
+      let instance = node.__vueParentComponent || null;
+      while (instance) {
+        const type = instance.type || {};
+        const name = type.__name || type.name || "";
+        if (name === componentName) {
+          return instance;
+        }
+        instance = instance.parent || null;
+      }
+      node = node.parentElement;
+    }
+    return null;
+  }
+
+  function isBlankCustomerPhone(dialog) {
+    const phone = findDialogField(dialog, "Mobile Number");
+    return !phone || !String(phone.value || "").trim();
+  }
+
+  async function createCustomerWithoutPhone(dialog, button) {
+    if (!dialog || !button || button.dataset.processedgeSubmitting === "1") {
+      return;
+    }
+
+    const firstName = fieldValue(dialog, "First Name");
+    const lastName = fieldValue(dialog, "Last Name");
+    const customerName =
+      fieldValue(dialog, "Customer Name") || [firstName, lastName].filter(Boolean).join(" ");
+
+    if (!customerName) {
+      showPOSAlert("Customer Name is required.", "orange");
+      return;
+    }
+
+    button.dataset.processedgeSubmitting = "1";
+    button.disabled = true;
+    const previousText = button.textContent;
+    button.textContent = "Creating...";
+
+    try {
+      const customer = await callAPI("pos_next.api.customers.create_customer", {
+        customer_name: customerName,
+        mobile_no: "",
+        email_id: fieldValue(dialog, "Email"),
+        customer_group: fieldValue(dialog, "Customer Group"),
+        territory: fieldValue(dialog, "Territory"),
+        custom_governorate: fieldValue(dialog, "Governorate"),
+        custom_district: fieldValue(dialog, "District"),
+        custom_first_name: firstName,
+        custom_last_name: lastName,
+        custom_is_publish: 1,
+        pos_profile: STATE.settings && STATE.settings.pos_profile ? STATE.settings.pos_profile : "",
+      });
+
+      const component = findVueComponentInstance(dialog, "CreateCustomerDialog");
+      if (component && typeof component.emit === "function") {
+        component.emit("customer-created", customer);
+        component.emit("update:modelValue", false);
+      } else {
+        const cancelButton = Array.from(dialog.querySelectorAll("button")).find(
+          (item) => (item.textContent || "").trim() === "Cancel"
+        );
+        if (cancelButton) cancelButton.click();
+      }
+
+      showPOSAlert("Customer created without phone number.", "green");
+    } catch (error) {
+      const message =
+        error && error.message ? error.message : "Unable to create customer without phone number.";
+      showPOSAlert(message, "orange");
+    } finally {
+      button.dataset.processedgeSubmitting = "0";
+      button.disabled = false;
+      button.textContent = previousText || "Create without phone";
+    }
+  }
+
+  function injectOptionalCustomerPhoneAction() {
+    const requirePhone =
+      !STATE.settings || STATE.settings.require_customer_phone === undefined
+        ? true
+        : Boolean(Number(STATE.settings.require_customer_phone));
+
+    if (requirePhone) {
+      document
+        .querySelectorAll("[data-processedge-create-customer-without-phone]")
+        .forEach((node) => node.remove());
+      return;
+    }
+
+    const dialogs = Array.from(
+      document.querySelectorAll("[role='dialog'], .dialog-content, .frappe-dialog, .z-dialog-content")
+    );
+
+    dialogs.forEach((dialog) => {
+      const text = dialog.textContent || "";
+      if (!text.includes("Create New Customer")) return;
+
+      const phoneInput = findDialogField(dialog, "Mobile Number");
+      if (phoneInput && !phoneInput.dataset.processedgeOptionalPhoneBound) {
+        phoneInput.dataset.processedgeOptionalPhoneBound = "1";
+        phoneInput.addEventListener("input", injectOptionalCustomerPhoneAction);
+      }
+
+      const existing = dialog.querySelector("[data-processedge-create-customer-without-phone]");
+      if (!isBlankCustomerPhone(dialog)) {
+        if (existing) existing.remove();
+        return;
+      }
+      if (existing) return;
+
+      const nativeCreateButton = Array.from(dialog.querySelectorAll("button")).find(
+        (item) => (item.textContent || "").trim() === "Create Customer"
+      );
+      const cancelButton = Array.from(dialog.querySelectorAll("button")).find(
+        (item) => (item.textContent || "").trim() === "Cancel"
+      );
+      const actions = (nativeCreateButton && nativeCreateButton.parentElement) || (cancelButton && cancelButton.parentElement);
+      if (!actions) return;
+
+      const button = document.createElement("button");
+      button.type = "button";
+      button.setAttribute("data-processedge-create-customer-without-phone", "1");
+      button.textContent = "Create without phone";
+      button.className =
+        "inline-flex items-center justify-center rounded-md bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700";
+      button.addEventListener("click", () => createCustomerWithoutPhone(dialog, button));
+
+      if (cancelButton && cancelButton.parentElement === actions) {
+        actions.insertBefore(button, cancelButton);
+      } else {
+        actions.appendChild(button);
+      }
+    });
+  }
+
   function patchUI() {
+    injectOptionalCustomerPhoneAction();
     unlockRateInputs();
     injectCashierExpenseAction();
 
