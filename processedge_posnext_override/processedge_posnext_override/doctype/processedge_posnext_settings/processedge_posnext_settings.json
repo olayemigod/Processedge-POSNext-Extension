@@ -42,7 +42,7 @@
   },
   {
    "default": "1",
-   "description": "When enabled, POSNext customer creation requires a mobile number. Disable to allow customers to be created without a phone number.",
+   "description": "Legacy fallback only. Used when the installed POSNext version does not provide its own Require Customer Phone Number setting. Newer POSNext versions use the native per-profile POS Settings value.",
    "fieldname": "require_customer_phone",
    "fieldtype": "Check",
    "label": "Require Customer Phone Number"

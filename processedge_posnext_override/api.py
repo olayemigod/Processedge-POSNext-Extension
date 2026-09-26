@@ -7,6 +7,8 @@ from processedge_posnext_override.overrides.pos_settings import (
     get_effective_posting_date_editability,
     get_effective_rate_editability,
     get_app_settings_doc,
+    get_customer_phone_policy_source,
+    get_effective_customer_phone_requirement,
     posnext_supports_customer_phone_policy,
 )
 
@@ -19,15 +21,33 @@ def get_pos_override_settings(pos_profile=None):
     if raw_roles:
         roles = [role.strip() for role in raw_roles.replace("\n", ",").split(",") if role.strip()]
     pos_profile = pos_profile or get_current_pos_profile()
-    require_customer_phone = settings.get("require_customer_phone")
-    if require_customer_phone is None:
-        require_customer_phone = 1
+    pos_settings_doc = None
+    if pos_profile:
+        from processedge_posnext_override.overrides.pos_settings import get_pos_settings_doc
+
+        pos_settings_doc = get_pos_settings_doc(pos_profile)
+
+    require_customer_phone = get_effective_customer_phone_requirement(
+        pos_profile=pos_profile,
+        pos_settings_doc=pos_settings_doc,
+    )
+    fallback_phone_policy = settings.get("require_customer_phone")
+    if fallback_phone_policy is None:
+        fallback_phone_policy = 1
+    native_phone_policy = None
+    if pos_settings_doc is not None and posnext_supports_customer_phone_policy():
+        native_value = pos_settings_doc.get("require_customer_phone")
+        native_phone_policy = int(1 if native_value is None else native_value)
+
     return {
         "allow_editable_selling_price": int(get_effective_rate_editability(pos_profile=pos_profile)),
         "allow_editing_posting_date": int(
             get_effective_posting_date_editability(pos_profile=pos_profile)
         ),
         "require_customer_phone": int(require_customer_phone),
+        "customer_phone_policy_source": get_customer_phone_policy_source(),
+        "posnext_require_customer_phone": native_phone_policy,
+        "processedge_fallback_require_customer_phone": int(fallback_phone_policy),
         "native_customer_phone_policy": int(posnext_supports_customer_phone_policy()),
         "editable_price_roles": roles,
         "pos_profile": pos_profile,
