@@ -177,6 +177,10 @@ def test_posting_date_request_helper_is_defined():
 
 def test_optional_customer_phone_runtime_contract():
     api = (ROOT / "processedge_posnext_override" / "api.py").read_text(encoding="utf-8")
+    hooks = (ROOT / "processedge_posnext_override" / "hooks.py").read_text(encoding="utf-8")
+    pos_settings = (
+        ROOT / "processedge_posnext_override" / "overrides" / "pos_settings.py"
+    ).read_text(encoding="utf-8")
     js = (
         ROOT
         / "processedge_posnext_override"
@@ -206,8 +210,17 @@ def test_optional_customer_phone_runtime_contract():
         assert fields["require_customer_phone"]["fieldtype"] == "Check"
 
     assert '"require_customer_phone": int(require_customer_phone)' in api
+    assert '"native_customer_phone_policy": int(posnext_supports_customer_phone_policy())' in api
+    assert "pos_next_bootstrap_settings" in hooks
+    assert "extend_bootstrap_settings" in hooks
+    assert "posnext_supports_customer_phone_policy" in pos_settings
+    assert 'fields.append("require_customer_phone")' in pos_settings
+    assert 'updates["require_customer_phone"] = flags["require_customer_phone"]' in pos_settings
+    assert 'settings["require_customer_phone"] = flags["require_customer_phone"]' in pos_settings
     assert '"pos_next.api.customers.create_customer"' in js
     assert "data-processedge-create-customer-without-phone" in js
+    assert "native_customer_phone_policy" in js
+    assert "if (requirePhone || nativePhonePolicy)" in js
     assert "findVueComponentInstance" in js
     assert r'replace(/\*/g, "")' in js
     assert r'replace(/\\*/g, "")' not in js

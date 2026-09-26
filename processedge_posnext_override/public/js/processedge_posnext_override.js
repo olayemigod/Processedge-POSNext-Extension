@@ -133,6 +133,7 @@
         allow_editable_selling_price: 0,
         allow_editing_posting_date: 0,
         require_customer_phone: 1,
+        native_customer_phone_policy: 0,
       };
       STATE.postingDate = getToday();
     }
@@ -1191,7 +1192,11 @@
         ? true
         : Boolean(Number(STATE.settings.require_customer_phone));
 
-    if (requirePhone) {
+    const nativePhonePolicy = Boolean(
+      Number(STATE.settings && STATE.settings.native_customer_phone_policy)
+    );
+
+    if (requirePhone || nativePhonePolicy) {
       document
         .querySelectorAll("[data-processedge-create-customer-without-phone]")
         .forEach((node) => node.remove());

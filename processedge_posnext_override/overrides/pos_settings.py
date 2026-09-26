@@ -18,11 +18,22 @@ def get_app_settings_doc():
     frappe.throw(_("{0} DocType is not installed yet.").format(APP_SETTINGS_DOCTYPE))
 
 
+def posnext_supports_customer_phone_policy():
+    return bool(
+        frappe.db.exists("DocType", "POS Settings")
+        and frappe.db.has_column("POS Settings", "require_customer_phone")
+    )
+
+
 def get_app_flags():
     doc = get_app_settings_doc()
+    require_customer_phone = doc.get("require_customer_phone")
+    if require_customer_phone is None:
+        require_customer_phone = 1
     return {
         "allow_user_to_edit_rate": int(doc.allow_editable_selling_price or 0),
         "allow_change_posting_date": int(doc.allow_editing_posting_date or 0),
+        "require_customer_phone": int(require_customer_phone),
     }
 
 
@@ -122,6 +133,8 @@ def apply_app_settings_to_doc(doc, method=None):
     doc.allow_change_posting_date = flags["allow_change_posting_date"]
     if not flags["allow_user_to_edit_rate"]:
         doc.allow_user_to_edit_rate = 0
+    if posnext_supports_customer_phone_policy():
+        doc.require_customer_phone = flags["require_customer_phone"]
 
 
 def ensure_posnext_settings_sync():
@@ -131,11 +144,16 @@ def ensure_posnext_settings_sync():
     flags = get_app_flags()
     pos_settings_names = frappe.get_all("POS Settings", pluck="name")
 
+    fields = ["allow_user_to_edit_rate", "allow_change_posting_date"]
+    supports_phone_policy = posnext_supports_customer_phone_policy()
+    if supports_phone_policy:
+        fields.append("require_customer_phone")
+
     for name in pos_settings_names:
         current = frappe.db.get_value(
             "POS Settings",
             name,
-            ["allow_user_to_edit_rate", "allow_change_posting_date"],
+            fields,
             as_dict=True,
         )
         if not current:
@@ -146,11 +164,25 @@ def ensure_posnext_settings_sync():
             updates["allow_user_to_edit_rate"] = 0
         if int(current.allow_change_posting_date or 0) != flags["allow_change_posting_date"]:
             updates["allow_change_posting_date"] = flags["allow_change_posting_date"]
+        if (
+            supports_phone_policy
+            and int(current.require_customer_phone or 0) != flags["require_customer_phone"]
+        ):
+            updates["require_customer_phone"] = flags["require_customer_phone"]
 
         if updates:
             frappe.db.set_value("POS Settings", name, updates, update_modified=False)
 
     frappe.clear_cache(doctype="POS Settings")
+
+
+def extend_bootstrap_settings(settings, pos_profile=None):
+    """Apply ProcessEdge runtime policy to POSNext bootstrap settings."""
+    if not isinstance(settings, dict):
+        return
+
+    flags = get_app_flags()
+    settings["require_customer_phone"] = flags["require_customer_phone"]
 
 
 def get_pos_settings_override(pos_profile):
@@ -169,4 +201,5 @@ def get_pos_settings_override(pos_profile):
         pos_profile=pos_profile,
         pos_settings_doc=pos_settings_doc,
     )
+    settings["require_customer_phone"] = get_app_flags()["require_customer_phone"]
     return settings
