@@ -154,3 +154,20 @@ def test_pos_ui_and_posting_date_governance_contract():
     assert "pointermove" in js
     assert "touch-action:none" in js
     assert "M7 3h10a2 2 0 012 2v16" in js
+
+
+def test_posting_date_request_helper_is_defined():
+    js = (
+        ROOT
+        / "processedge_posnext_override"
+        / "public"
+        / "js"
+        / "processedge_posnext_override.js"
+    ).read_text(encoding="utf-8")
+
+    helper = js.index("function writeInvoiceDateFields(payload)")
+    caller = js.index("writeInvoiceDateFields(payload);")
+    assert helper >= 0
+    assert caller > helper
+    assert "payload.posting_date = STATE.postingDate" in js
+    assert "payload.transaction_date = STATE.postingDate" in js
