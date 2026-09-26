@@ -704,6 +704,23 @@
     return key ? String(headers[key] || "") : "";
   }
 
+  function writeInvoiceDateFields(payload) {
+    if (
+      !payload ||
+      typeof payload !== "object" ||
+      Array.isArray(payload) ||
+      !STATE.settings ||
+      !STATE.settings.allow_editing_posting_date ||
+      !STATE.postingDate
+    ) {
+      return payload;
+    }
+
+    payload.posting_date = STATE.postingDate;
+    payload.transaction_date = STATE.postingDate;
+    return payload;
+  }
+
   function patchContainerField(container, field) {
     if (!container || !Object.prototype.hasOwnProperty.call(container, field)) {
       return false;
