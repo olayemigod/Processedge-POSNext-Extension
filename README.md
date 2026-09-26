@@ -10,6 +10,7 @@ App-level POSNext customizations for ERPNext/Frappe that keep upgrade risk low b
 - Sync layer that maps app settings to POSNext's native POS Settings fields
 - POS page runtime patch for posting date UI and invoice payload injection
 - Backend validation guard for POS invoice posting date changes
+- Configurable customer phone requirement for POS customer creation
 - Optional RetailEdge Cashier Expense action inside POSNext without POSNext core edits
 - Responsive Cashier Expense modal with server-side category search, active-shift context, and idempotent submission
 - Script Report: `POS Closing Variance vs Expenses`
@@ -43,6 +44,7 @@ bench build --app pos_next --app processedge_posnext_override
 2. Toggle:
    - `Allow Editable Selling Price on POS`
    - `Allow Editing Posting Date on POS`
+   - `Require Customer Phone Number` (enabled by default)
 3. Save the document.
 4. Reload the POS screen.
 
