@@ -8,6 +8,8 @@
   "feature_section",
   "allow_editable_selling_price",
   "allow_editing_posting_date",
+  "customer_creation_section",
+  "require_customer_phone",
   "permission_section",
   "protect_erpnext_permissions_from_posnext",
   "role_section",
@@ -32,6 +34,18 @@
    "fieldname": "allow_editing_posting_date",
    "fieldtype": "Check",
    "label": "Allow Editing Posting Date on POS"
+  },
+  {
+   "fieldname": "customer_creation_section",
+   "fieldtype": "Section Break",
+   "label": "Customer Creation"
+  },
+  {
+   "default": "1",
+   "description": "When enabled, POSNext customer creation requires a mobile number. Disable to allow customers to be created without a phone number.",
+   "fieldname": "require_customer_phone",
+   "fieldtype": "Check",
+   "label": "Require Customer Phone Number"
   },
   {
    "fieldname": "permission_section",

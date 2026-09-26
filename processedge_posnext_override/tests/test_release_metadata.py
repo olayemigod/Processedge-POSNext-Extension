@@ -173,3 +173,40 @@ def test_posting_date_request_helper_is_defined():
     assert "payload.transaction_date = STATE.postingDate" in js
     assert 'payload.doctype === "Sales Invoice"' in js
     assert "payload.set_posting_time = 1" in js
+
+
+def test_optional_customer_phone_runtime_contract():
+    api = (ROOT / "processedge_posnext_override" / "api.py").read_text(encoding="utf-8")
+    js = (
+        ROOT
+        / "processedge_posnext_override"
+        / "public"
+        / "js"
+        / "processedge_posnext_override.js"
+    ).read_text(encoding="utf-8")
+
+    settings_paths = [
+        ROOT
+        / "processedge_posnext_override"
+        / "doctype"
+        / "processedge_posnext_settings"
+        / "processedge_posnext_settings.json",
+        ROOT
+        / "processedge_posnext_override"
+        / "processedge_posnext_override"
+        / "doctype"
+        / "processedge_posnext_settings"
+        / "processedge_posnext_settings.json",
+    ]
+
+    for path in settings_paths:
+        settings = json.loads(path.read_text(encoding="utf-8"))
+        fields = {field["fieldname"]: field for field in settings["fields"]}
+        assert fields["require_customer_phone"]["default"] == "1"
+        assert fields["require_customer_phone"]["fieldtype"] == "Check"
+
+    assert '"require_customer_phone": int(require_customer_phone)' in api
+    assert '"pos_next.api.customers.create_customer"' in js
+    assert "data-processedge-create-customer-without-phone" in js
+    assert "findVueComponentInstance" in js
+    assert 'component.emit("customer-created", customer)' in js
