@@ -34,3 +34,7 @@ doc_events = {
 override_whitelisted_methods = {
     "pos_next.pos_next.doctype.pos_settings.pos_settings.get_pos_settings": "processedge_posnext_override.overrides.pos_settings.get_pos_settings_override",
 }
+
+pos_next_bootstrap_settings = [
+    "processedge_posnext_override.overrides.pos_settings.extend_bootstrap_settings",
+]
