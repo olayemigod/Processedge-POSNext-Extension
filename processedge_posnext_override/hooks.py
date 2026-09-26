@@ -20,6 +20,8 @@ fixtures = []
 after_install = "processedge_posnext_override.install.after_install"
 after_migrate = "processedge_posnext_override.install.after_migrate"
 
+after_request = ["processedge_posnext_override.request_hooks.inject_pos_page_script"]
+
 doc_events = {
     "POS Settings": {
         "validate": "processedge_posnext_override.overrides.pos_settings.apply_app_settings_to_doc",
