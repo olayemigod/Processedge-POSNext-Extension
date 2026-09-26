@@ -101,6 +101,22 @@ def get_effective_rate_editability(pos_profile=None, pos_settings_doc=None):
     return int(pos_settings_doc.allow_user_to_edit_rate or 0)
 
 
+def get_effective_posting_date_editability(pos_profile=None, pos_settings_doc=None):
+    """Resolve posting-date permission from the active POS profile.
+
+    POSNext already stores this policy per POS Settings record. The ProcessEdge
+    setting continues to act as the synchronized default, while the active
+    profile value is the runtime source of truth when that record exists.
+    """
+
+    pos_profile = pos_profile or get_current_pos_profile()
+    pos_settings_doc = pos_settings_doc or get_pos_settings_doc(pos_profile)
+    if pos_settings_doc is not None:
+        return int(pos_settings_doc.allow_change_posting_date or 0)
+
+    return int(get_app_settings_doc().allow_editing_posting_date or 0)
+
+
 def apply_app_settings_to_doc(doc, method=None):
     flags = get_app_flags()
     doc.allow_change_posting_date = flags["allow_change_posting_date"]
@@ -144,11 +160,13 @@ def get_pos_settings_override(pos_profile):
     if not settings:
         settings = {}
 
-    flags = get_app_flags()
     pos_settings_doc = get_pos_settings_doc(pos_profile)
     settings["allow_user_to_edit_rate"] = get_effective_rate_editability(
         pos_profile=pos_profile,
         pos_settings_doc=pos_settings_doc,
     )
-    settings["allow_change_posting_date"] = flags["allow_change_posting_date"]
+    settings["allow_change_posting_date"] = get_effective_posting_date_editability(
+        pos_profile=pos_profile,
+        pos_settings_doc=pos_settings_doc,
+    )
     return settings
