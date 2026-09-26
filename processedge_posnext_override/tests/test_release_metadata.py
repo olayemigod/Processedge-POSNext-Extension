@@ -94,3 +94,32 @@ def test_pos_vite_page_injection_contract():
     assert '"text/html"' in request_hooks
     assert "response.get_data(as_text=True)" in request_hooks
     assert "response.set_data(html)" in request_hooks
+
+
+def test_pos_runtime_requests_are_isolated_and_vite_compatible():
+    js = (
+        ROOT
+        / "processedge_posnext_override"
+        / "public"
+        / "js"
+        / "processedge_posnext_override.js"
+    ).read_text(encoding="utf-8")
+
+    assert "frappe.call is unavailable" not in js
+    assert "window.frappe.call" not in js
+    assert 'CSRF_TOKEN_ENDPOINT = "/api/method/pos_next.api.utilities.get_csrf_token"' in js
+    assert '"X-Frappe-CSRF-Token": csrfToken' in js
+    assert 'method: "GET"' in js
+    assert 'method: "POST"' in js
+
+    assert "INVOICE_PATCH_FIELDS" in js
+    assert '"pos_next.api.invoices.update_invoice", "data"' in js
+    assert '"pos_next.api.invoices.submit_invoice", "invoice"' in js
+    assert '"pos_next.api.invoices.apply_offers", "invoice_data"' in js
+    assert "if (url && isPOSPage() && invoicePatchField(url))" in js
+    assert "!STATE.settings.allow_editing_posting_date" in js
+
+    # Normal POSNext API requests must remain byte-for-byte untouched. The request
+    # wrapper may only transform the three invoice endpoints above.
+    assert "function parseBody(body)" not in js
+    assert "patchRequestPayload(url, init)" in js
