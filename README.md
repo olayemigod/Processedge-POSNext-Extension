@@ -13,6 +13,7 @@ App-level POSNext customizations for ERPNext/Frappe that keep upgrade risk low b
 - Optional RetailEdge Cashier Expense action inside POSNext without POSNext core edits
 - Responsive Cashier Expense modal with server-side category search, active-shift context, and idempotent submission
 - Script Report: `POS Closing Variance vs Expenses`
+- Migration-safe ERPNext permission compatibility guard for POSNext `Custom DocPerm` fixtures
 
 ## Target Stack
 
@@ -106,3 +107,29 @@ Use this to review whether POS shortages at a business location are supported by
 
 - Repository name: `Processedge-POSNext-Extension`
 - Description: `ERPNext v16 custom app for POSNext price-edit and posting-date controls without core edits.`
+
+## POSNext Permission Compatibility
+
+POSNext ships `Custom DocPerm` fixtures for standard ERPNext DocTypes. Frappe treats a DocType's custom permission rows as the complete effective permission matrix, so an isolated POSNext role can unintentionally hide standard ERPNext roles such as `Accounts User` or `Sales User`.
+
+The ProcessEdge compatibility guard runs after install and after every migrate. When it detects a POSNext-managed role on an affected ERPNext DocType, it:
+
+- preserves all existing POSNext and site-specific custom rows;
+- preserves any existing custom values for standard roles;
+- adds only missing standard ERPNext permission rows;
+- never deletes or edits transactional/accounting documents;
+- never changes POSNext Cashier or Nexus POS Manager rights.
+
+Affected DocTypes currently follow the upstream POSNext fixture set, including Account, Sales Invoice, Payment Entry, Customer, Item, Warehouse, POS Profile, POS opening/closing documents, Bin, Promotional Scheme, Territory, Serial and Batch Bundle, and Journal Entry.
+
+If a site intentionally maintains a fully custom permission matrix for these DocTypes, disable `Protect ERPNext Permissions from POSNext Overrides` before migration.
+
+### Permission QA
+
+After migration:
+
+1. Confirm POSNext Cashier can open a shift, search items/stock, create customers, sell, collect payment, return, and close a shift.
+2. Confirm Accounts User and Sales User retain their normal ERPNext access.
+3. Confirm a non-POS workflow can resolve the company receivable account without an Account permission error.
+4. Confirm Payment Entry and Sales Invoice roles remain correct.
+5. Re-run the checks after a subsequent `bench migrate` to verify idempotency.
