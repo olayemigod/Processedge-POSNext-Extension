@@ -183,7 +183,8 @@
       "w-12 h-12 rounded-lg flex items-center justify-center transition-all relative group text-emerald-700 hover:bg-emerald-50 hover:text-emerald-800";
     button.innerHTML = [
       '<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">',
-      '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-2.761 0-5 1.343-5 3s2.239 3 5 3 5 1.343 5 3-2.239 3-5 3m0-12V6m0 14v-2m9-6a9 9 0 11-18 0 9 9 0 0118 0z"></path>',
+      '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 3h10a2 2 0 012 2v16l-3-2-4 2-4-2-3 2V5a2 2 0 012-2z"></path>',
+      '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 8h6M9 12h6M9 16h3"></path>',
       "</svg>",
       '<div class="absolute start-full ms-2 px-2 py-1 bg-gray-900 text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none whitespace-nowrap z-50">Cashier Expense</div>',
     ].join("");
@@ -199,6 +200,112 @@
     }
   }
 
+  function clampFloatingButton(button) {
+    if (!button) return;
+    const rect = button.getBoundingClientRect();
+    const margin = 8;
+    const maxLeft = Math.max(margin, window.innerWidth - rect.width - margin);
+    const maxTop = Math.max(margin, window.innerHeight - rect.height - margin);
+    const left = Math.min(Math.max(rect.left, margin), maxLeft);
+    const top = Math.min(Math.max(rect.top, margin), maxTop);
+    button.style.left = left + "px";
+    button.style.top = top + "px";
+    button.style.right = "auto";
+    button.style.bottom = "auto";
+  }
+
+  function restoreCashierExpenseFloatingPosition(button) {
+    try {
+      const raw = window.localStorage.getItem("processedge.cashierExpenseFloatingPosition");
+      if (!raw) return;
+      const saved = JSON.parse(raw);
+      if (!Number.isFinite(saved.left) || !Number.isFinite(saved.top)) return;
+      button.style.left = saved.left + "px";
+      button.style.top = saved.top + "px";
+      button.style.right = "auto";
+      button.style.bottom = "auto";
+      requestAnimationFrame(() => clampFloatingButton(button));
+    } catch (_error) {
+      // Position persistence is optional.
+    }
+  }
+
+  function persistCashierExpenseFloatingPosition(button) {
+    try {
+      const rect = button.getBoundingClientRect();
+      window.localStorage.setItem(
+        "processedge.cashierExpenseFloatingPosition",
+        JSON.stringify({ left: rect.left, top: rect.top })
+      );
+    } catch (_error) {
+      // Position persistence is optional.
+    }
+  }
+
+  function makeCashierExpenseFloatingDraggable(button) {
+    let pointerId = null;
+    let startX = 0;
+    let startY = 0;
+    let startLeft = 0;
+    let startTop = 0;
+    let dragged = false;
+    let suppressClick = false;
+
+    button.addEventListener("pointerdown", (event) => {
+      if (event.button !== undefined && event.button !== 0) return;
+      const rect = button.getBoundingClientRect();
+      pointerId = event.pointerId;
+      startX = event.clientX;
+      startY = event.clientY;
+      startLeft = rect.left;
+      startTop = rect.top;
+      dragged = false;
+      button.setPointerCapture?.(pointerId);
+    });
+
+    button.addEventListener("pointermove", (event) => {
+      if (pointerId === null || event.pointerId !== pointerId) return;
+      const dx = event.clientX - startX;
+      const dy = event.clientY - startY;
+      if (!dragged && Math.hypot(dx, dy) < 6) return;
+      dragged = true;
+      event.preventDefault();
+      button.style.left = startLeft + dx + "px";
+      button.style.top = startTop + dy + "px";
+      button.style.right = "auto";
+      button.style.bottom = "auto";
+      clampFloatingButton(button);
+    });
+
+    const finish = (event) => {
+      if (pointerId === null || (event.pointerId !== undefined && event.pointerId !== pointerId)) {
+        return;
+      }
+      button.releasePointerCapture?.(pointerId);
+      pointerId = null;
+      if (dragged) {
+        suppressClick = true;
+        clampFloatingButton(button);
+        persistCashierExpenseFloatingPosition(button);
+        window.setTimeout(() => {
+          suppressClick = false;
+        }, 0);
+      }
+    };
+
+    button.addEventListener("pointerup", finish);
+    button.addEventListener("pointercancel", finish);
+    button.addEventListener("click", (event) => {
+      if (suppressClick || dragged) {
+        event.preventDefault();
+        event.stopPropagation();
+        dragged = false;
+        return;
+      }
+      openCashierExpenseDialog();
+    });
+  }
+
   function createCashierExpenseFloatingButton() {
     if (document.querySelector("[data-processedge-cashier-expense-action='floating']")) {
       return;
@@ -208,34 +315,42 @@
     button.type = "button";
     button.setAttribute("data-processedge-cashier-expense-action", "floating");
     button.setAttribute("aria-label", "Cashier Expense");
-    button.title = "Cashier Expense";
+    button.title = "Cashier Expense — drag to reposition";
+    const compact = window.innerWidth < 1024;
     button.style.cssText = [
       "position:fixed",
-      "right:20px",
-      "bottom:24px",
+      "right:" + (compact ? "12px" : "20px"),
+      "bottom:" + (compact ? "16px" : "24px"),
       "z-index:9000",
       "display:flex",
       "align-items:center",
-      "gap:8px",
-      "height:44px",
-      "padding:0 14px",
+      "justify-content:center",
+      "gap:6px",
+      "width:" + (compact ? "38px" : "auto"),
+      "height:" + (compact ? "38px" : "44px"),
+      "padding:" + (compact ? "0" : "0 12px"),
       "border:1px solid #a7f3d0",
-      "border-radius:14px",
+      "border-radius:" + (compact ? "999px" : "14px"),
       "background:#ecfdf5",
       "color:#047857",
       "font-weight:700",
-      "font-size:13px",
-      "box-shadow:0 10px 30px rgba(15,23,42,.16)",
-      "cursor:pointer",
+      "font-size:12px",
+      "box-shadow:0 8px 24px rgba(15,23,42,.16)",
+      "cursor:grab",
+      "touch-action:none",
+      "user-select:none",
     ].join(";");
     button.innerHTML = [
-      '<svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24">',
-      '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-2.761 0-5 1.343-5 3s2.239 3 5 3 5 1.343 5 3-2.239 3-5 3m0-12V6m0 14v-2m9-6a9 9 0 11-18 0 9 9 0 0118 0z"></path>',
+      '<svg width="' + (compact ? "17" : "18") + '" height="' + (compact ? "17" : "18") + '" fill="none" stroke="currentColor" viewBox="0 0 24 24">',
+      '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 3h10a2 2 0 012 2v16l-3-2-4 2-4-2-3 2V5a2 2 0 012-2z"></path>',
+      '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 8h6M9 12h6M9 16h3"></path>',
       "</svg>",
-      "<span>Cashier Expense</span>",
+      compact ? "" : "<span>Cashier Expense</span>",
     ].join("");
-    button.addEventListener("click", openCashierExpenseDialog);
+
     document.body.appendChild(button);
+    restoreCashierExpenseFloatingPosition(button);
+    makeCashierExpenseFloatingDraggable(button);
   }
 
   function injectCashierExpenseAction() {
@@ -740,107 +855,159 @@
     const input = wrapper.querySelector("input");
     if (input) {
       input.addEventListener("change", function (event) {
-        STATE.postingDate = event.target.value || getToday();
+        syncPostingDateInputs(event.target.value, event.target);
       });
     }
 
     target.parentNode.insertBefore(wrapper, target);
   }
 
-  function createPersistentPostingDateField(container) {
-    if (!container || container.querySelector("[data-processedge-posting-date-global]")) {
+  function syncPostingDateInputs(value, source) {
+    STATE.postingDate = value || getToday();
+    document
+      .querySelectorAll("[data-processedge-posting-date-global] input[type='date'], [data-processedge-posting-date] input[type='date']")
+      .forEach((input) => {
+        if (input !== source && input.value !== STATE.postingDate) {
+          input.value = STATE.postingDate;
+        }
+      });
+  }
+
+  function createPostingDateHeaderField(header) {
+    if (!header || document.querySelector("[data-processedge-posting-date-global]")) {
       return;
     }
 
+    const mainRow = Array.from(header.querySelectorAll("div")).find((node) => {
+      const classes = node.classList;
+      return classes && classes.contains("flex-1") && classes.contains("justify-between");
+    });
+    if (!mainRow || mainRow.children.length < 2) {
+      return;
+    }
+
+    const rightControls = mainRow.children[1];
     const wrapper = document.createElement("div");
-    wrapper.setAttribute("data-processedge-posting-date-global", "1");
-    wrapper.className = "processedge-posting-date-global";
+    wrapper.setAttribute("data-processedge-posting-date-global", "header");
+    wrapper.title = "Posting Date";
     wrapper.style.cssText = [
       "display:flex",
       "align-items:center",
-      "gap:8px",
-      "padding:8px 12px",
-      "margin:8px 0",
+      "gap:5px",
+      "height:34px",
+      "padding:0 7px",
       "border:1px solid #bfdbfe",
-      "border-radius:12px",
+      "border-radius:10px",
       "background:#eff6ff",
-      "font-size:14px",
-      "width:fit-content",
-      "max-width:100%",
+      "color:#1d4ed8",
+      "flex-shrink:0",
+      "box-sizing:border-box",
     ].join(";");
-    wrapper.innerHTML = [
-      '<label style="font-weight:600;color:#1d4ed8;white-space:nowrap;">Posting Date</label>',
-      `<input type="date" value="${STATE.postingDate || getToday()}" style="height:36px;padding:0 10px;border:1px solid #93c5fd;border-radius:10px;background:#fff;min-width:170px;" />`,
+
+    const icon = document.createElement("span");
+    icon.innerHTML = [
+      '<svg width="15" height="15" fill="none" stroke="currentColor" viewBox="0 0 24 24">',
+      '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path>',
+      "</svg>",
     ].join("");
+    icon.style.cssText = "display:flex;align-items:center;flex:0 0 auto;";
 
-    const input = wrapper.querySelector("input");
-    if (input) {
-      input.addEventListener("change", function (event) {
-        STATE.postingDate = event.target.value || getToday();
-      });
-    }
+    const label = document.createElement("span");
+    label.textContent = "Posting Date";
+    label.style.cssText = "font-size:11px;font-weight:700;white-space:nowrap;";
 
-    container.prepend(wrapper);
+    const input = document.createElement("input");
+    input.type = "date";
+    input.value = STATE.postingDate || getToday();
+    input.setAttribute("aria-label", "Posting Date");
+    input.style.cssText = [
+      "height:26px",
+      "width:132px",
+      "border:0",
+      "outline:0",
+      "background:transparent",
+      "color:#1e3a8a",
+      "font-size:12px",
+      "font-weight:600",
+      "padding:0",
+    ].join(";");
+    input.addEventListener("change", (event) => {
+      syncPostingDateInputs(event.target.value, event.target);
+    });
+
+    wrapper.appendChild(icon);
+    wrapper.appendChild(label);
+    wrapper.appendChild(input);
+
+    const applyResponsive = () => {
+      const mobile = window.innerWidth < 768;
+      label.style.display = mobile ? "none" : "inline";
+      input.style.width = mobile ? "112px" : "132px";
+      wrapper.style.padding = mobile ? "0 5px" : "0 7px";
+    };
+    applyResponsive();
+    window.addEventListener("resize", applyResponsive, { passive: true });
+
+    rightControls.insertBefore(wrapper, rightControls.firstChild || null);
   }
 
   function createFloatingPostingDateField() {
-    if (document.querySelector("[data-processedge-posting-date-floating]")) {
+    if (document.querySelector("[data-processedge-posting-date-global]")) {
       return;
     }
 
     const wrapper = document.createElement("div");
-    wrapper.setAttribute("data-processedge-posting-date-floating", "1");
+    wrapper.setAttribute("data-processedge-posting-date-global", "floating");
     wrapper.style.cssText = [
       "position:fixed",
-      "right:24px",
-      "bottom:96px",
-      "z-index:9999",
+      "right:12px",
+      "top:76px",
+      "z-index:8500",
       "display:flex",
       "align-items:center",
-      "gap:8px",
-      "padding:10px 12px",
+      "gap:5px",
+      "height:34px",
+      "padding:0 7px",
       "border:1px solid #bfdbfe",
-      "border-radius:14px",
+      "border-radius:10px",
       "background:#eff6ff",
-      "box-shadow:0 10px 30px rgba(15, 23, 42, 0.12)",
-      "font-size:14px",
-      "max-width:calc(100vw - 48px)",
+      "box-shadow:0 8px 24px rgba(15,23,42,.12)",
+      "color:#1d4ed8",
     ].join(";");
+
     wrapper.innerHTML = [
-      '<label style="font-weight:600;color:#1d4ed8;white-space:nowrap;">Posting Date</label>',
-      `<input type="date" value="${STATE.postingDate || getToday()}" style="height:36px;padding:0 10px;border:1px solid #93c5fd;border-radius:10px;background:#fff;min-width:170px;" />`,
+      '<svg width="15" height="15" fill="none" stroke="currentColor" viewBox="0 0 24 24">',
+      '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"></path>',
+      "</svg>",
+      '<input type="date" aria-label="Posting Date" value="' +
+        (STATE.postingDate || getToday()) +
+        '" style="height:26px;width:116px;border:0;outline:0;background:transparent;color:#1e3a8a;font-size:12px;font-weight:600;padding:0;" />',
     ].join("");
 
     const input = wrapper.querySelector("input");
-    if (input) {
-      input.addEventListener("change", function (event) {
-        STATE.postingDate = event.target.value || getToday();
-      });
-    }
+    input.addEventListener("change", (event) => {
+      syncPostingDateInputs(event.target.value, event.target);
+    });
 
     document.body.appendChild(wrapper);
   }
 
   function injectPostingDateIntoPage() {
     if (!STATE.settings || !STATE.settings.allow_editing_posting_date) {
+      document.querySelectorAll("[data-processedge-posting-date-global]").forEach((node) => node.remove());
       return;
     }
 
-    const candidates = [
-      "[data-v-app] main",
-      "#app main",
-      ".layout-main-section",
-      ".page-content",
-      "main",
-    ];
+    const posButton = document.querySelector("button[title='POS Next'], button[aria-label='POS Next']");
+    const header =
+      (posButton && posButton.closest(".sticky")) ||
+      Array.from(document.querySelectorAll("div.sticky")).find((node) => node.classList.contains("top-0"));
 
-    for (const selector of candidates) {
-      const container = document.querySelector(selector);
-      if (container) {
-        createPersistentPostingDateField(container);
-        createFloatingPostingDateField();
-        return;
-      }
+    if (header) {
+      createPostingDateHeaderField(header);
+      const floating = document.querySelector("[data-processedge-posting-date-global='floating']");
+      if (floating) floating.remove();
+      return;
     }
 
     createFloatingPostingDateField();
