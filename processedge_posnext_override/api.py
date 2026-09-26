@@ -18,11 +18,15 @@ def get_pos_override_settings(pos_profile=None):
     if raw_roles:
         roles = [role.strip() for role in raw_roles.replace("\n", ",").split(",") if role.strip()]
     pos_profile = pos_profile or get_current_pos_profile()
+    require_customer_phone = settings.get("require_customer_phone")
+    if require_customer_phone is None:
+        require_customer_phone = 1
     return {
         "allow_editable_selling_price": int(get_effective_rate_editability(pos_profile=pos_profile)),
         "allow_editing_posting_date": int(
             get_effective_posting_date_editability(pos_profile=pos_profile)
         ),
+        "require_customer_phone": int(require_customer_phone),
         "editable_price_roles": roles,
         "pos_profile": pos_profile,
         "posting_date": frappe.utils.nowdate(),
