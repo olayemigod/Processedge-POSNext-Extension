@@ -462,10 +462,14 @@
           { values: JSON.stringify(values) }
         );
         closeCashierExpenseDialog();
-        showPOSAlert(
-          "Cashier Expense " + (result && result.name ? result.name : "") + " recorded.",
-          "green"
-        );
+        const expenseName = result && result.name ? " " + result.name : "";
+        const needsAttention = result && result.ledger_status === "Failed";
+        const resultMessage =
+          "Cashier Expense" +
+          expenseName +
+          " recorded." +
+          (result && result.user_message ? " " + result.user_message : "");
+        showPOSAlert(resultMessage, needsAttention ? "orange" : "green");
         await loadCashierExpenseBridge();
         injectCashierExpenseAction();
       } catch (error) {
