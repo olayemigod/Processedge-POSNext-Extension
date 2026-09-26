@@ -50,3 +50,35 @@ def test_canonical_repository_url_is_documented():
 def test_packaged_json_files_are_valid():
     for path in (ROOT / "processedge_posnext_override").rglob("*.json"):
         json.loads(path.read_text(encoding="utf-8"))
+
+def test_retailedge_cashier_expense_bridge_is_optional_and_governed():
+    hooks = (ROOT / "processedge_posnext_override" / "hooks.py").read_text(encoding="utf-8")
+    api = (ROOT / "processedge_posnext_override" / "api.py").read_text(encoding="utf-8")
+    js = (
+        ROOT
+        / "processedge_posnext_override"
+        / "public"
+        / "js"
+        / "processedge_posnext_override.js"
+    ).read_text(encoding="utf-8")
+
+    assert 'required_apps = ["erpnext", "pos_next"]' in hooks
+    assert 'RETAILEDGE_APP = "retailedge"' in api
+    assert "frappe.get_installed_apps()" in api
+    assert "retailedge.pos_cashier_expense.get_pos_cashier_expense_capabilities" in api
+    assert "retailedge.pos_cashier_expense.create_pos_cashier_expense" in api
+    assert "retailedge.guided_cashier_expense.search_guided_expense_categories" in api
+    assert "get_cashier_expense_bridge_context" in api
+    assert "search_cashier_expense_categories" in api
+    assert "create_retailedge_cashier_expense" in api
+
+    assert "data-processedge-cashier-expense-action" in js
+    assert "Cashier Expense" in js
+    assert "client_request_id" in js
+    assert "crypto.randomUUID" in js
+    assert "processedge_posnext_override.api.create_retailedge_cashier_expense" in js
+    assert "processedge_posnext_override.api.search_cashier_expense_categories" in js
+    assert "doc.company =" not in js
+    assert "doc.branch =" not in js
+    assert "doc.payment_account =" not in js
+
