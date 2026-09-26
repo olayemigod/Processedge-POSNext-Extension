@@ -209,4 +209,6 @@ def test_optional_customer_phone_runtime_contract():
     assert '"pos_next.api.customers.create_customer"' in js
     assert "data-processedge-create-customer-without-phone" in js
     assert "findVueComponentInstance" in js
+    assert r'replace(/\*/g, "")' in js
+    assert r'replace(/\\*/g, "")' not in js
     assert 'component.emit("customer-created", customer)' in js
