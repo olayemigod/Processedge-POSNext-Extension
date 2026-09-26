@@ -1079,7 +1079,7 @@
   }
 
   function normalizedLabelText(value) {
-    return String(value || "").replace(/\\*/g, "").trim();
+    return String(value || "").replace(/\*/g, "").trim();
   }
 
   function findDialogField(dialog, labelText) {
