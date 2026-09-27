@@ -1313,10 +1313,122 @@
     });
   }
 
+  const MOBILE_PARTIAL_PAYMENT_ATTR = "data-processedge-mobile-partial-payment";
+
+  function normalizedButtonText(button) {
+    return String((button && button.textContent) || "")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  function findDesktopPartialPaymentButton(dialog) {
+    if (!dialog) return null;
+
+    const desktopRows = Array.from(
+      dialog.querySelectorAll("div.hidden.lg\\:flex.items-center.gap-2")
+    );
+
+    for (const row of desktopRows) {
+      const button = Array.from(row.querySelectorAll("button")).find(
+        (item) => normalizedButtonText(item) === "Partial Payment"
+      );
+      if (button) return button;
+    }
+
+    return null;
+  }
+
+  function removeMobilePartialPaymentBridge(scope) {
+    if (!scope) return;
+    scope
+      .querySelectorAll(`[${MOBILE_PARTIAL_PAYMENT_ATTR}]`)
+      .forEach((node) => node.remove());
+  }
+
+  function injectMobilePartialPaymentAction() {
+    const dialogs = Array.from(
+      document.querySelectorAll("[role='dialog'], .dialog-content, .frappe-dialog, .z-dialog-content")
+    );
+
+    dialogs.forEach((dialog) => {
+      const existingBridge = dialog.querySelector(`[${MOBILE_PARTIAL_PAYMENT_ATTR}]`);
+      const desktopPartialButton = findDesktopPartialPaymentButton(dialog);
+
+      // POSNext's shared canComplete/paymentButtonText logic is already correct.
+      // The pending upstream fix only exposes that action on mobile. If the
+      // desktop action is not currently a valid partial-payment action, remove
+      // any bridge we previously injected.
+      if (!desktopPartialButton) {
+        if (existingBridge) existingBridge.remove();
+        return;
+      }
+
+      const desktopRow = desktopPartialButton.parentElement;
+      const rightColumn = desktopRow && desktopRow.parentElement;
+      const mobileSection =
+        rightColumn && rightColumn.querySelector("div.lg\\:hidden.flex.flex-col");
+
+      if (!mobileSection) {
+        if (existingBridge) existingBridge.remove();
+        return;
+      }
+
+      // Upgrade-safe: once BrainWise ships the native mobile fix, the native
+      // button will already render "Partial Payment". In that case the
+      // extension removes its compatibility bridge and does nothing else.
+      const nativeMobilePartialButton = Array.from(
+        mobileSection.querySelectorAll("button")
+      ).find(
+        (button) =>
+          !button.hasAttribute(MOBILE_PARTIAL_PAYMENT_ATTR) &&
+          normalizedButtonText(button) === "Partial Payment"
+      );
+
+      if (nativeMobilePartialButton) {
+        removeMobilePartialPaymentBridge(mobileSection);
+        return;
+      }
+
+      let mobileButton = existingBridge;
+      if (!mobileButton) {
+        mobileButton = document.createElement("button");
+        mobileButton.type = "button";
+        mobileButton.setAttribute(MOBILE_PARTIAL_PAYMENT_ATTR, "1");
+        mobileButton.textContent = "Partial Payment";
+        mobileButton.className =
+          "w-full inline-flex items-center justify-center gap-2 text-sm font-semibold px-5 rounded-lg bg-blue-600 text-white active:bg-blue-800 focus:outline-none";
+        mobileButton.style.cssText =
+          "width:100%;min-height:40px;border:0;border-radius:8px;padding:8px 16px;font-weight:700;";
+
+        mobileButton.addEventListener("click", function () {
+          const currentDesktopButton = findDesktopPartialPaymentButton(dialog);
+          if (!currentDesktopButton || currentDesktopButton.disabled) return;
+          currentDesktopButton.click();
+        });
+
+        mobileSection.appendChild(mobileButton);
+      }
+
+      const shouldDisable = !!desktopPartialButton.disabled;
+      if (mobileButton.disabled !== shouldDisable) {
+        mobileButton.disabled = shouldDisable;
+      }
+      const nextCursor = shouldDisable ? "not-allowed" : "pointer";
+      if (mobileButton.style.cursor !== nextCursor) {
+        mobileButton.style.cursor = nextCursor;
+      }
+      const nextOpacity = shouldDisable ? "0.6" : "1";
+      if (mobileButton.style.opacity !== nextOpacity) {
+        mobileButton.style.opacity = nextOpacity;
+      }
+    });
+  }
+
   function patchUI() {
     injectOptionalCustomerPhoneAction();
     unlockRateInputs();
     injectCashierExpenseAction();
+    injectMobilePartialPaymentAction();
 
     if (!STATE.settings || !STATE.settings.allow_editing_posting_date) {
       return;
@@ -1353,6 +1465,7 @@
 
     STATE.observer.observe(document.body, {
       childList: true,
+      characterData: true,
       subtree: true,
     });
   }
