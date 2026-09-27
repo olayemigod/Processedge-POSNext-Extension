@@ -219,7 +219,7 @@
 
   function restoreCashierExpenseFloatingPosition(button) {
     try {
-      const raw = window.localStorage.getItem("processedge.cashierExpenseFloatingPosition");
+      const raw = window.localStorage.getItem("processedge.cashierExpenseFloatingPosition.v2");
       if (!raw) return;
       const saved = JSON.parse(raw);
       if (!Number.isFinite(saved.left) || !Number.isFinite(saved.top)) return;
@@ -237,7 +237,7 @@
     try {
       const rect = button.getBoundingClientRect();
       window.localStorage.setItem(
-        "processedge.cashierExpenseFloatingPosition",
+        "processedge.cashierExpenseFloatingPosition.v2",
         JSON.stringify({ left: rect.left, top: rect.top })
       );
     } catch (_error) {
@@ -322,18 +322,18 @@
     const compact = window.innerWidth < 1024;
     button.style.cssText = [
       "position:fixed",
-      "right:" + (compact ? "12px" : "20px"),
-      "bottom:" + (compact ? "16px" : "24px"),
+      "right:" + (compact ? "14px" : "20px"),
+      "bottom:" + (compact ? "18px" : "24px"),
       "z-index:9000",
       "display:flex",
       "align-items:center",
       "justify-content:center",
       "gap:6px",
-      "width:" + (compact ? "38px" : "auto"),
-      "height:" + (compact ? "38px" : "44px"),
-      "padding:" + (compact ? "0" : "0 12px"),
+      "width:" + (compact ? "48px" : "auto"),
+      "height:" + (compact ? "48px" : "48px"),
+      "padding:" + (compact ? "0" : "0 14px"),
       "border:1px solid #a7f3d0",
-      "border-radius:" + (compact ? "999px" : "14px"),
+      "border-radius:" + (compact ? "14px" : "14px"),
       "background:#ecfdf5",
       "color:#047857",
       "font-weight:700",
@@ -344,7 +344,7 @@
       "user-select:none",
     ].join(";");
     button.innerHTML = [
-      '<svg width="' + (compact ? "17" : "18") + '" height="' + (compact ? "17" : "18") + '" fill="none" stroke="currentColor" viewBox="0 0 24 24">',
+      '<svg width="' + (compact ? "21" : "20") + '" height="' + (compact ? "21" : "20") + '" fill="none" stroke="currentColor" viewBox="0 0 24 24">',
       '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 3h10a2 2 0 012 2v16l-3-2-4 2-4-2-3 2V5a2 2 0 012-2z"></path>',
       '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 8h6M9 12h6M9 16h3"></path>',
       "</svg>",
@@ -458,6 +458,7 @@
   }
 
   async function openCashierExpenseDialog() {
+    await loadCashierExpenseBridge();
     const bridge = STATE.cashierExpense.bridge || {};
     if (!bridge.ready) {
       const reason =
@@ -1541,6 +1542,53 @@
     }, 0);
   }
 
+  function isNativePOSExpenseButton(target) {
+    const button = target && target.closest ? target.closest("button") : null;
+    if (!button) return null;
+
+    const title = String(button.getAttribute("title") || "").trim();
+    const text = normalizedButtonText(button);
+    if (
+      title === "Record POS expense" ||
+      text === "POS Expense" ||
+      text.includes("POS Expense")
+    ) {
+      return button;
+    }
+    return null;
+  }
+
+  function bindNativePOSExpenseRouting() {
+    if (document.documentElement.hasAttribute("data-processedge-pos-expense-routing")) {
+      return;
+    }
+
+    document.documentElement.setAttribute("data-processedge-pos-expense-routing", "1");
+    document.addEventListener(
+      "click",
+      (event) => {
+        const button = isNativePOSExpenseButton(event.target);
+        if (!button) return;
+
+        const bridge = STATE.cashierExpense.bridge || {};
+        if (!bridge.available || !bridge.enabled || !bridge.show_action) {
+          return;
+        }
+
+        // Stop POSNext from opening its own ExpenseDialog. On legacy Neotex
+        // profiles that endpoint can be disabled even while RetailEdge Cashier
+        // Expense is the correct operational workflow.
+        event.preventDefault();
+        event.stopPropagation();
+        if (typeof event.stopImmediatePropagation === "function") {
+          event.stopImmediatePropagation();
+        }
+        openCashierExpenseDialog();
+      },
+      true
+    );
+  }
+
   function bindPaymentBridgeRefreshEvents() {
     if (document.documentElement.hasAttribute("data-processedge-partial-payment-events")) {
       return;
@@ -1578,6 +1626,7 @@
     await loadCashierExpenseBridge();
     patchFetch();
     patchUI();
+    bindNativePOSExpenseRouting();
     bindPaymentBridgeRefreshEvents();
     startObserver();
   }
