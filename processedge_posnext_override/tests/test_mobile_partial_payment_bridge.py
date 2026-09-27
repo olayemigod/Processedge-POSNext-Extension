@@ -9,19 +9,30 @@ SOURCE = (
 ).read_text(encoding="utf-8")
 
 
-def test_mobile_partial_payment_bridge_is_present():
+def test_mobile_partial_payment_bridge_uses_posnext_completion_state():
     assert 'data-processedge-mobile-partial-payment' in SOURCE
-    assert 'normalizedButtonText(item) === "Partial Payment"' in SOURCE
+    assert "findDesktopCompletionButton" in SOURCE
+    assert "desktopCompletionButton.disabled" in SOURCE
     assert "currentDesktopButton.click()" in SOURCE
 
 
+def test_bridge_only_appears_while_outstanding_pay_action_exists():
+    assert "hasOutstandingPayAction" in SOURCE
+    assert "/^Pay\\s+/i.test(normalizedButtonText(button))" in SOURCE
+
+
 def test_bridge_stands_down_when_native_mobile_fix_exists():
-    assert "nativeMobilePartialButton" in SOURCE
+    assert "nativeMobileCompletionButton" in SOURCE
     assert "removeMobilePartialPaymentBridge(mobileSection)" in SOURCE
     assert (
-        '!button.hasAttribute(MOBILE_PARTIAL_PAYMENT_ATTR)' in SOURCE
-        and 'normalizedButtonText(button) === "Partial Payment"' in SOURCE
+        "!button.hasAttribute(MOBILE_PARTIAL_PAYMENT_ATTR)" in SOURCE
+        and "isNativeCompletionButton(button)" in SOURCE
     )
+
+
+def test_observer_tracks_disabled_state_changes():
+    assert "attributes: true" in SOURCE
+    assert 'attributeFilter: ["disabled"]' in SOURCE
 
 
 def test_partial_payment_bridge_runs_independently_of_posting_date_setting():
