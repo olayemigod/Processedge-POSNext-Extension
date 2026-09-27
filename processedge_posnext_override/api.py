@@ -99,6 +99,51 @@ def _legacy_retailedge_available():
     )
 
 
+def _legacy_pos_operational_submit_authorized(context=None):
+    """Allow the cashier's own active POS shift to submit a legacy till expense.
+
+    Older RetailEdge sites can have stale DocType submit permissions even though
+    the user is the active cashier for the POS opening shift. This is a narrow
+    operational authorization, not a general permission bypass: the user must
+    own the active opening shift and still have create permission on the expense.
+    """
+    user = frappe.session.user
+    if not user or user == "Guest":
+        return False
+
+    context = context or {}
+    cashier = str(context.get("cashier") or context.get("user") or "").strip()
+    if cashier and cashier != user:
+        return False
+
+    shift = str(context.get("linked_pos_opening_shift") or "").strip()
+    if not shift or not frappe.db.exists("DocType", "POS Opening Shift"):
+        return False
+    if not frappe.db.exists("POS Opening Shift", shift):
+        return False
+
+    shift_meta = frappe.get_meta("POS Opening Shift")
+    if shift_meta.has_field("user"):
+        shift_user = str(frappe.db.get_value("POS Opening Shift", shift, "user") or "").strip()
+        if shift_user and shift_user != user:
+            return False
+
+    context_profile = str(context.get("pos_profile") or "").strip()
+    if context_profile and shift_meta.has_field("pos_profile"):
+        shift_profile = str(
+            frappe.db.get_value("POS Opening Shift", shift, "pos_profile") or ""
+        ).strip()
+        if shift_profile and shift_profile != context_profile:
+            return False
+
+    if shift_meta.has_field("status"):
+        status = str(frappe.db.get_value("POS Opening Shift", shift, "status") or "").strip()
+        if status and status.lower() != "open":
+            return False
+
+    return True
+
+
 def _legacy_cashier_expense_bridge_context(pos_profile=None, opening_shift=None):
     """Compatibility bridge for pre-EdgeSuite RetailEdge installations.
 
@@ -127,10 +172,15 @@ def _legacy_cashier_expense_bridge_context(pos_profile=None, opening_shift=None)
 
     can_create = bool(frappe.has_permission(RETAILEDGE_EXPENSE_DOCTYPE, "create"))
     can_submit = bool(frappe.has_permission(RETAILEDGE_EXPENSE_DOCTYPE, "submit"))
+    operational_submit = _legacy_pos_operational_submit_authorized(context)
     if not can_create:
         blockers.append(_("You do not have permission to create Cashier Expenses."))
-    if not can_submit:
-        blockers.append(_("You do not have permission to submit Cashier Expenses."))
+    if not can_submit and not operational_submit:
+        blockers.append(
+            _(
+                "You are not authorised to submit Cashier Expenses for the active POS shift."
+            )
+        )
 
     resolved_profile = str(context.get("pos_profile") or "").strip()
     resolved_shift = str(context.get("linked_pos_opening_shift") or "").strip()
@@ -209,6 +259,8 @@ def _legacy_cashier_expense_bridge_context(pos_profile=None, opening_shift=None)
                 "pos_integration_enabled": True,
                 "native_form_fallback": True,
                 "legacy_backend": True,
+                "submit_permission": can_submit,
+                "operational_submit_authorized": operational_submit,
             },
         },
     }
@@ -299,9 +351,16 @@ def _create_legacy_retailedge_cashier_expense(values=None):
             _("You do not have permission to create Cashier Expenses."),
             frappe.PermissionError,
         )
-    if not frappe.has_permission(RETAILEDGE_EXPENSE_DOCTYPE, "submit"):
+
+    legacy_context_method = _get_retailedge_method(RETAILEDGE_LEGACY_CONTEXT_METHOD)
+    legacy_context = legacy_context_method() if legacy_context_method else {}
+    can_submit = bool(frappe.has_permission(RETAILEDGE_EXPENSE_DOCTYPE, "submit"))
+    operational_submit = _legacy_pos_operational_submit_authorized(legacy_context)
+    if not can_submit and not operational_submit:
         frappe.throw(
-            _("You do not have permission to submit Cashier Expenses."),
+            _(
+                "You are not authorised to submit Cashier Expenses for the active POS shift."
+            ),
             frappe.PermissionError,
         )
 
@@ -342,8 +401,6 @@ def _create_legacy_retailedge_cashier_expense(values=None):
                 )
             return _legacy_expense_result(existing, idempotent=True)
 
-    legacy_context_method = _get_retailedge_method(RETAILEDGE_LEGACY_CONTEXT_METHOD)
-    legacy_context = legacy_context_method() if legacy_context_method else {}
     settings = (legacy_context or {}).get("settings") or {}
 
     doc = frappe.new_doc(RETAILEDGE_EXPENSE_DOCTYPE)
@@ -369,6 +426,11 @@ def _create_legacy_retailedge_cashier_expense(values=None):
     # resolves cashier/company/branch/POS/account context and validates available
     # till cash. The extension supplies only the cashier-entered fields.
     doc.insert()
+    if not can_submit and operational_submit:
+        # Purpose-built POS endpoint: the user has already been constrained to
+        # their own active opening shift above. Ignore only the stale DocType
+        # submit matrix; RetailEdge's controller validations still run normally.
+        doc.flags.ignore_permissions = True
     doc.submit()
     return _legacy_expense_result(
         frappe.get_doc(RETAILEDGE_EXPENSE_DOCTYPE, doc.name),
