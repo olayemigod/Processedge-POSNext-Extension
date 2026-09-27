@@ -33,6 +33,7 @@ doc_events = {
 
 override_whitelisted_methods = {
     "pos_next.pos_next.doctype.pos_settings.pos_settings.get_pos_settings": "processedge_posnext_override.overrides.pos_settings.get_pos_settings_override",
+    "pos_next.api.shifts.get_closing_shift_data": "processedge_posnext_override.overrides.closing_shift.get_closing_shift_data",
 }
 
 pos_next_bootstrap_settings = [
