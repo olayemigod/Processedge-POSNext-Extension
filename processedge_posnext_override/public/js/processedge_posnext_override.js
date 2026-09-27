@@ -1376,14 +1376,33 @@
       .forEach((node) => node.remove());
   }
 
+  function findPaymentColumnForMobileSection(mobileSection) {
+    if (!mobileSection) return null;
+
+    let node = mobileSection.parentElement;
+    while (node && node !== document.body) {
+      if (
+        node.classList &&
+        node.classList.contains("lg:col-span-3") &&
+        node.classList.contains("flex") &&
+        node.classList.contains("flex-col")
+      ) {
+        return node;
+      }
+      node = node.parentElement;
+    }
+
+    return mobileSection.parentElement || null;
+  }
+
   function injectMobilePartialPaymentAction() {
-    const dialogs = Array.from(
-      document.querySelectorAll("[role='dialog'], .dialog-content, .frappe-dialog, .z-dialog-content")
+    const mobileSections = Array.from(
+      document.querySelectorAll("div.lg\\:hidden.flex.flex-col")
     );
 
-    dialogs.forEach((dialog) => {
-      const mobileSection = findMobilePaymentSection(dialog);
-      if (!mobileSection) return;
+    mobileSections.forEach((mobileSection) => {
+      const paymentColumn = findPaymentColumnForMobileSection(mobileSection);
+      if (!paymentColumn) return;
 
       const existingBridge = mobileSection.querySelector(
         `[${MOBILE_PARTIAL_PAYMENT_ATTR}]`
@@ -1404,21 +1423,16 @@
         return;
       }
 
-      const desktopCompletionButton = findDesktopCompletionButton(dialog);
+      const desktopCompletionButton = findDesktopCompletionButton(paymentColumn);
 
-      // This is the key compatibility signal. POSNext already computes
-      // canComplete correctly for partial payments. When the desktop completion
-      // action is enabled but the mobile completion action is absent, we are in
-      // the exact mobile partial-payment gap fixed by the pending upstream PR.
+      // POSNext already computes canComplete correctly for partial payments.
+      // When the hidden desktop completion action is enabled while the mobile
+      // completion action is absent, expose that same action on mobile.
       if (!desktopCompletionButton || desktopCompletionButton.disabled) {
         if (existingBridge) existingBridge.remove();
         return;
       }
 
-      // Avoid showing the bridge before any amount has actually been entered.
-      // The mobile section's ordinary "Pay <remaining>" action is present while
-      // an outstanding amount remains; when fully paid POSNext renders its
-      // native completion button instead and the branch above stands down.
       const hasOutstandingPayAction = Array.from(
         mobileSection.querySelectorAll("button")
       ).some(
@@ -1444,7 +1458,10 @@
           "width:100%;min-height:40px;border:0;border-radius:8px;padding:8px 16px;font-weight:700;cursor:pointer;";
 
         mobileButton.addEventListener("click", function () {
-          const currentDesktopButton = findDesktopCompletionButton(dialog);
+          const currentPaymentColumn =
+            findPaymentColumnForMobileSection(mobileSection);
+          const currentDesktopButton =
+            findDesktopCompletionButton(currentPaymentColumn);
           if (!currentDesktopButton || currentDesktopButton.disabled) return;
           currentDesktopButton.click();
         });
