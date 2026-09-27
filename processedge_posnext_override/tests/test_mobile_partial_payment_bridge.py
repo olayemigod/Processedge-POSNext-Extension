@@ -50,3 +50,13 @@ def test_payment_interactions_explicitly_refresh_bridge():
     assert '["click", "input", "change"]' in SOURCE
     assert "schedulePaymentBridgeRefresh" in SOURCE
     assert "requestAnimationFrame" in SOURCE
+
+
+def test_bridge_discovers_mobile_payment_surface_without_dialog_wrapper():
+    assert 'document.querySelectorAll("div.lg\\\\:hidden.flex.flex-col")' in SOURCE
+    assert "findPaymentColumnForMobileSection" in SOURCE
+    assert 'node.classList.contains("lg:col-span-3")' in SOURCE
+    bridge_start = SOURCE.index("function injectMobilePartialPaymentAction()")
+    bridge_end = SOURCE.index("function patchUI()", bridge_start)
+    bridge_source = SOURCE[bridge_start:bridge_end]
+    assert "document.querySelectorAll(\"[role='dialog']" not in bridge_source
