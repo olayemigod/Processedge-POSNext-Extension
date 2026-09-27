@@ -1484,6 +1484,34 @@
     });
   }
 
+  let paymentBridgeRefreshScheduled = false;
+
+  function schedulePaymentBridgeRefresh() {
+    if (paymentBridgeRefreshScheduled || !isPOSPage()) {
+      return;
+    }
+
+    paymentBridgeRefreshScheduled = true;
+    window.setTimeout(function () {
+      window.requestAnimationFrame(function () {
+        paymentBridgeRefreshScheduled = false;
+        injectMobilePartialPaymentAction();
+      });
+    }, 0);
+  }
+
+  function bindPaymentBridgeRefreshEvents() {
+    if (document.documentElement.hasAttribute("data-processedge-partial-payment-events")) {
+      return;
+    }
+
+    document.documentElement.setAttribute("data-processedge-partial-payment-events", "1");
+
+    ["click", "input", "change"].forEach((eventName) => {
+      document.addEventListener(eventName, schedulePaymentBridgeRefresh, true);
+    });
+  }
+
   function startObserver() {
     if (STATE.observer) {
       STATE.observer.disconnect();
@@ -1511,6 +1539,7 @@
     await loadCashierExpenseBridge();
     patchFetch();
     patchUI();
+    bindPaymentBridgeRefreshEvents();
     startObserver();
   }
 
