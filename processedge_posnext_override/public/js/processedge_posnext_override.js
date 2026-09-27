@@ -1182,7 +1182,7 @@
     } finally {
       button.dataset.processedgeSubmitting = "0";
       button.disabled = false;
-      button.textContent = previousText || "Create without phone";
+      button.textContent = previousText || "Create Customer";
     }
   }
 
