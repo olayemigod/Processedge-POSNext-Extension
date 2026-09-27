@@ -43,3 +43,10 @@ def test_partial_payment_bridge_runs_independently_of_posting_date_setting():
         patch_ui,
     )
     assert partial_bridge < posting_date_gate
+
+
+def test_payment_interactions_explicitly_refresh_bridge():
+    assert "bindPaymentBridgeRefreshEvents" in SOURCE
+    assert '["click", "input", "change"]' in SOURCE
+    assert "schedulePaymentBridgeRefresh" in SOURCE
+    assert "requestAnimationFrame" in SOURCE
