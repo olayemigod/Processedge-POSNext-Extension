@@ -1225,42 +1225,79 @@
     }
   }
 
-  function bindLegacyOptionalPhoneButton(dialog, nativeCreateButton) {
-    if (!dialog || !nativeCreateButton) return;
+  function findNativeCreateCustomerButton(dialog) {
+    if (!dialog) return null;
+    return Array.from(dialog.querySelectorAll("button")).find(
+      (item) =>
+        !item.hasAttribute("data-processedge-create-customer-without-phone") &&
+        (item.textContent || "").trim() === "Create Customer"
+    ) || null;
+  }
 
-    if (!nativeCreateButton.dataset.processedgeOptionalPhoneBound) {
-      nativeCreateButton.dataset.processedgeOptionalPhoneBound = "1";
-      nativeCreateButton.addEventListener(
-        "click",
-        (event) => {
-          if (!isBlankCustomerPhone(dialog)) return;
+  function removeOptionalPhoneFallback(dialog, nativeCreateButton) {
+    if (!dialog) return;
 
-          event.preventDefault();
-          event.stopPropagation();
-          if (typeof event.stopImmediatePropagation === "function") {
-            event.stopImmediatePropagation();
-          }
-          createCustomerWithoutPhone(dialog, nativeCreateButton);
-        },
-        true
-      );
+    dialog
+      .querySelectorAll("[data-processedge-create-customer-without-phone]")
+      .forEach((node) => node.remove());
+
+    const nativeButton = nativeCreateButton || findNativeCreateCustomerButton(dialog);
+    if (nativeButton && nativeButton.dataset.processedgeHiddenForPhoneFallback === "1") {
+      nativeButton.style.display = "";
+      nativeButton.removeAttribute("data-processedge-hidden-for-phone-fallback");
     }
+  }
+
+  function ensureOptionalPhoneFallback(dialog) {
+    if (!dialog) return;
+
+    const nativeCreateButton = findNativeCreateCustomerButton(dialog);
+    if (!nativeCreateButton) return;
 
     const permissionBlocked = (dialog.textContent || "").includes("Permission Required");
-    const canCreateWithoutPhone = !permissionBlocked && customerIdentityIsReady(dialog);
-    const shouldDisable = !canCreateWithoutPhone;
+    const canCreateWithoutPhone =
+      !permissionBlocked && customerIdentityIsReady(dialog) && isBlankCustomerPhone(dialog);
 
-    // Keep this idempotent. The POS bridge also observes Vue DOM changes; repeatedly
-    // rewriting the same disabled attribute can create a self-sustaining
-    // MutationObserver loop that leaves the checkout page effectively frozen.
-    if (nativeCreateButton.disabled !== shouldDisable) {
-      nativeCreateButton.disabled = shouldDisable;
+    // Current POSNext builds handle optional phone natively. Stand down whenever
+    // Vue has already enabled its own Create Customer action.
+    if (!canCreateWithoutPhone || !nativeCreateButton.disabled) {
+      removeOptionalPhoneFallback(dialog, nativeCreateButton);
+      return;
     }
 
-    if (canCreateWithoutPhone) {
-      nativeCreateButton.setAttribute("data-processedge-phone-optional-enabled", "1");
-    } else {
-      nativeCreateButton.removeAttribute("data-processedge-phone-optional-enabled");
+    // Older POSNext 2.0 frontends can keep the native button disabled even when
+    // the server/profile policy allows a blank phone. Do not fight Vue over the
+    // disabled attribute: render one extension-owned action that delegates to
+    // the same POSNext customer API.
+    let fallback = dialog.querySelector(
+      "[data-processedge-create-customer-without-phone]"
+    );
+
+    if (!fallback) {
+      fallback = document.createElement("button");
+      fallback.type = "button";
+      fallback.setAttribute("data-processedge-create-customer-without-phone", "1");
+      fallback.textContent = "Create Customer";
+      fallback.className =
+        "inline-flex items-center justify-center rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-blue-700 active:bg-blue-800 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed";
+      fallback.style.cssText =
+        "min-height:36px;border:0;border-radius:8px;padding:8px 16px;background:#2563eb;color:#fff;font-weight:700;cursor:pointer;";
+
+      fallback.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        createCustomerWithoutPhone(dialog, fallback);
+      });
+
+      nativeCreateButton.parentElement.insertBefore(fallback, nativeCreateButton);
+    }
+
+    if (nativeCreateButton.dataset.processedgeHiddenForPhoneFallback !== "1") {
+      nativeCreateButton.style.display = "none";
+      nativeCreateButton.setAttribute(
+        "data-processedge-hidden-for-phone-fallback",
+        "1"
+      );
     }
   }
 
@@ -1270,8 +1307,11 @@
       if (!input || input.dataset.processedgeOptionalPhoneInputBound) return;
 
       input.dataset.processedgeOptionalPhoneInputBound = "1";
-      input.addEventListener("input", () => injectOptionalCustomerPhoneAction());
-      input.addEventListener("change", () => injectOptionalCustomerPhoneAction());
+      const refresh = () => {
+        window.requestAnimationFrame(() => ensureOptionalPhoneFallback(dialog));
+      };
+      input.addEventListener("input", refresh);
+      input.addEventListener("change", refresh);
     });
   }
 
@@ -1281,40 +1321,19 @@
         ? true
         : Boolean(Number(STATE.settings.require_customer_phone));
 
-    const nativePhonePolicy = Boolean(
-      Number(STATE.settings && STATE.settings.native_customer_phone_policy)
-    );
+    const dialogs = Array.from(
+      document.querySelectorAll("[role='dialog'], .dialog-content, .frappe-dialog, .z-dialog-content")
+    ).filter((dialog) => (dialog.textContent || "").includes("Create New Customer"));
 
-    document
-      .querySelectorAll("[data-processedge-create-customer-without-phone]")
-      .forEach((node) => node.remove());
-
-    if (requirePhone || nativePhonePolicy) {
+    if (requirePhone) {
+      dialogs.forEach((dialog) => removeOptionalPhoneFallback(dialog));
       return;
     }
 
-    const dialogs = Array.from(
-      document.querySelectorAll("[role='dialog'], .dialog-content, .frappe-dialog, .z-dialog-content")
-    );
-
     dialogs.forEach((dialog) => {
-      const text = dialog.textContent || "";
-      if (!text.includes("Create New Customer")) return;
-
       markPhoneOptional(dialog);
       bindLegacyOptionalPhoneInputs(dialog);
-
-      const nativeCreateButton = Array.from(dialog.querySelectorAll("button")).find(
-        (item) => (item.textContent || "").trim() === "Create Customer"
-      );
-      if (!nativeCreateButton) return;
-
-      if (!isBlankCustomerPhone(dialog)) {
-        nativeCreateButton.removeAttribute("data-processedge-phone-optional-enabled");
-        return;
-      }
-
-      bindLegacyOptionalPhoneButton(dialog, nativeCreateButton);
+      ensureOptionalPhoneFallback(dialog);
     });
   }
 
