@@ -64,10 +64,13 @@ def sync_posnext_settings():
     return {"ok": True}
 
 RETAILEDGE_APP = "retailedge"
+RETAILEDGE_EXPENSE_DOCTYPE = "RetailEdge Cashier Expense"
+RETAILEDGE_CATEGORY_DOCTYPE = "RetailEdge Expense Category"
 RETAILEDGE_CAPABILITY_METHOD = "retailedge.pos_cashier_expense.get_pos_cashier_expense_capabilities"
 RETAILEDGE_GUIDED_CONTEXT_METHOD = "retailedge.guided_cashier_expense.get_guided_cashier_expense_context"
 RETAILEDGE_CATEGORY_SEARCH_METHOD = "retailedge.guided_cashier_expense.search_guided_expense_categories"
 RETAILEDGE_CREATE_METHOD = "retailedge.pos_cashier_expense.create_pos_cashier_expense"
+RETAILEDGE_LEGACY_CONTEXT_METHOD = "retailedge.api.get_cashier_expense_entry_context"
 
 
 def _get_retailedge_method(method_path):
@@ -88,23 +91,305 @@ def _require_retailedge_method(method_path):
     return method
 
 
-@frappe.whitelist()
-def get_cashier_expense_bridge_context(pos_profile=None, opening_shift=None):
-    """Return only permission-aware RetailEdge POS expense context.
+def _legacy_retailedge_available():
+    return bool(
+        RETAILEDGE_APP in frappe.get_installed_apps()
+        and frappe.db.exists("DocType", RETAILEDGE_EXPENSE_DOCTYPE)
+        and frappe.db.exists("DocType", RETAILEDGE_CATEGORY_DOCTYPE)
+    )
 
-    The POSNext extension remains a presentation bridge. RetailEdge resolves and
-    validates company, branch, shift, accounts, category access and posting policy.
+
+def _legacy_cashier_expense_bridge_context(pos_profile=None, opening_shift=None):
+    """Compatibility bridge for pre-EdgeSuite RetailEdge installations.
+
+    The extension owns only the POS presentation layer. RetailEdge's existing
+    DocType controller remains authoritative for cashier, company, branch,
+    POS shift, account resolution, cash availability, validation and submit.
     """
-    capability_method = _get_retailedge_method(RETAILEDGE_CAPABILITY_METHOD)
-    if not capability_method:
+    context_method = _get_retailedge_method(RETAILEDGE_LEGACY_CONTEXT_METHOD)
+    if not _legacy_retailedge_available() or not context_method:
         return {
             "available": 0,
             "enabled": 0,
             "show_action": 0,
             "ready": 0,
-            "reason": _("RetailEdge is not installed or the POS expense bridge is unavailable."),
+            "bridge_mode": "unavailable",
+            "ui_mode": "posnext_extension",
+            "requires_edgesuite": 0,
+            "reason": _("RetailEdge is not installed or Cashier Expense is unavailable."),
             "categories": [],
+            "guided": {},
         }
+
+    context = context_method() or {}
+    settings = context.get("settings") or {}
+    blockers = []
+
+    can_create = bool(frappe.has_permission(RETAILEDGE_EXPENSE_DOCTYPE, "create"))
+    can_submit = bool(frappe.has_permission(RETAILEDGE_EXPENSE_DOCTYPE, "submit"))
+    if not can_create:
+        blockers.append(_("You do not have permission to create Cashier Expenses."))
+    if not can_submit:
+        blockers.append(_("You do not have permission to submit Cashier Expenses."))
+
+    resolved_profile = str(context.get("pos_profile") or "").strip()
+    resolved_shift = str(context.get("linked_pos_opening_shift") or "").strip()
+    if pos_profile and resolved_profile and str(pos_profile).strip() != resolved_profile:
+        blockers.append(_("The active POS Profile does not match the RetailEdge cashier context."))
+    if opening_shift and resolved_shift and str(opening_shift).strip() != resolved_shift:
+        blockers.append(_("The active POS Opening Shift does not match the RetailEdge cashier context."))
+
+    require_open_shift = bool(
+        frappe.utils.cint(settings.get("require_open_shift_for_cashier_expense", 1))
+    )
+    allow_without_cash_account = bool(
+        frappe.utils.cint(settings.get("allow_cashier_expense_without_cash_account", 0))
+    )
+    if require_open_shift and not resolved_shift:
+        blockers.append(_("Open a POS shift before recording a Cashier Expense."))
+    if not allow_without_cash_account and not context.get("payment_account"):
+        blockers.append(_("RetailEdge could not resolve the cash payment account for this shift."))
+    if not context.get("company"):
+        blockers.append(_("RetailEdge could not resolve the company for this cashier."))
+
+    guided_context = {
+        "cashier": context.get("cashier") or context.get("user") or frappe.session.user,
+        "company": context.get("company") or "",
+        "branch": context.get("branch") or "",
+        "pos_profile": resolved_profile,
+        "opening_shift": resolved_shift,
+        "payment_account": context.get("payment_account") or "",
+        "cost_center": context.get("cost_center") or "",
+        "available_cash": frappe.utils.flt(
+            context.get("available_shift_cash_before_expense")
+        ),
+        "opening_cash": frappe.utils.flt(context.get("shift_opening_cash_amount")),
+        "cash_sales": frappe.utils.flt(context.get("shift_cash_sales_amount")),
+        "prior_expenses": frappe.utils.flt(context.get("prior_shift_expense_amount")),
+        "cash_control_message": context.get("cash_control_message") or "",
+    }
+
+    company = str(guided_context.get("company") or "").strip()
+    return {
+        "available": 1,
+        "enabled": 1,
+        "show_action": 1 if can_create else 0,
+        "ready": 0 if blockers else 1,
+        "bridge_mode": "legacy_retailedge",
+        "ui_mode": "posnext_extension",
+        "requires_edgesuite": 0,
+        "posting_mode": "RetailEdge Native",
+        "reason": blockers[0] if blockers else "",
+        "categories": _search_legacy_cashier_expense_categories(
+            txt="",
+            company=company or None,
+            limit=20,
+        )
+        if can_create
+        else [],
+        "guided": {
+            "title": _("Record Cashier Expense"),
+            "subtitle": _(
+                "Record cash leaving the active POS till using the installed RetailEdge workflow."
+            ),
+            "ready": not blockers,
+            "blocking_reasons": blockers,
+            "defaults": {
+                "expense_category": "",
+                "amount": "",
+                "description": "",
+                "expense_date": frappe.utils.nowdate(),
+            },
+            "context": guided_context,
+            "capabilities": {
+                "allow_expense_date_edit": bool(
+                    frappe.utils.cint(settings.get("allow_cashier_expense_date_edit", 0))
+                ),
+                "posting_mode": "RetailEdge Native",
+                "pos_integration_enabled": True,
+                "native_form_fallback": True,
+                "legacy_backend": True,
+            },
+        },
+    }
+
+
+def _search_legacy_cashier_expense_categories(txt="", company=None, limit=20):
+    if not _legacy_retailedge_available():
+        return []
+    if not frappe.has_permission(RETAILEDGE_EXPENSE_DOCTYPE, "create"):
+        frappe.throw(
+            _("You do not have permission to create Cashier Expenses."),
+            frappe.PermissionError,
+        )
+
+    limit = max(1, min(frappe.utils.cint(limit) or 20, 50))
+    filters = [[RETAILEDGE_CATEGORY_DOCTYPE, "is_active", "=", 1]]
+    if txt:
+        filters.append(
+            [RETAILEDGE_CATEGORY_DOCTYPE, "category_name", "like", f"%{txt}%"]
+        )
+
+    or_filters = None
+    if company:
+        or_filters = [
+            [RETAILEDGE_CATEGORY_DOCTYPE, "company", "=", company],
+            [RETAILEDGE_CATEGORY_DOCTYPE, "company", "is", "not set"],
+        ]
+
+    rows = frappe.get_list(
+        RETAILEDGE_CATEGORY_DOCTYPE,
+        filters=filters,
+        or_filters=or_filters,
+        fields=["name", "category_name", "category_code", "description"],
+        order_by="category_name asc",
+        limit_page_length=limit,
+    )
+    return [
+        {
+            "value": row.name,
+            "label": row.category_name or row.name,
+            "description": row.description
+            or (_("Code {0}").format(row.category_code) if row.category_code else ""),
+        }
+        for row in rows
+    ]
+
+
+def _coerce_bridge_values(values):
+    if not values:
+        return {}
+    if isinstance(values, str):
+        values = frappe.parse_json(values)
+    if isinstance(values, frappe._dict):
+        return dict(values)
+    if isinstance(values, dict):
+        return dict(values)
+    frappe.throw(_("Invalid Cashier Expense values."))
+    return {}
+
+
+def _legacy_expense_result(doc, *, idempotent=False):
+    return {
+        "idempotent": bool(idempotent),
+        "doctype": doc.doctype,
+        "name": doc.name,
+        "docstatus": frappe.utils.cint(doc.docstatus),
+        "expense_status": getattr(doc, "expense_status", None),
+        "ledger_status": getattr(doc, "ledger_status", None),
+        "cash_movement_status": getattr(doc, "cash_movement_status", None),
+        "posting_mode": getattr(doc, "posting_mode_applied", None) or "RetailEdge Native",
+        "posting_reference_type": getattr(doc, "posting_reference_type", None),
+        "posting_reference": getattr(doc, "posting_reference", None),
+        "company": getattr(doc, "company", None),
+        "branch": getattr(doc, "branch", None),
+        "pos_profile": getattr(doc, "pos_profile", None),
+        "opening_shift": getattr(doc, "linked_pos_opening_shift", None),
+        "amount": frappe.utils.flt(getattr(doc, "amount", 0)),
+        "user_message": getattr(doc, "user_message", None),
+        "bridge_mode": "legacy_retailedge",
+    }
+
+
+def _create_legacy_retailedge_cashier_expense(values=None):
+    if not _legacy_retailedge_available():
+        frappe.throw(_("RetailEdge Cashier Expense is unavailable on this site."))
+    if not frappe.has_permission(RETAILEDGE_EXPENSE_DOCTYPE, "create"):
+        frappe.throw(
+            _("You do not have permission to create Cashier Expenses."),
+            frappe.PermissionError,
+        )
+    if not frappe.has_permission(RETAILEDGE_EXPENSE_DOCTYPE, "submit"):
+        frappe.throw(
+            _("You do not have permission to submit Cashier Expenses."),
+            frappe.PermissionError,
+        )
+
+    values = _coerce_bridge_values(values)
+    category = str(values.get("expense_category") or "").strip()
+    if not category:
+        frappe.throw(_("Expense Category is required."))
+    if not frappe.db.exists(RETAILEDGE_CATEGORY_DOCTYPE, category):
+        frappe.throw(_("Expense Category {0} does not exist.").format(category))
+    if not frappe.has_permission(RETAILEDGE_CATEGORY_DOCTYPE, "read", doc=category):
+        frappe.throw(
+            _("You do not have permission to use Expense Category {0}.").format(category),
+            frappe.PermissionError,
+        )
+    if not frappe.utils.cint(
+        frappe.db.get_value(RETAILEDGE_CATEGORY_DOCTYPE, category, "is_active")
+    ):
+        frappe.throw(_("Expense Category {0} is inactive.").format(category))
+
+    amount = frappe.utils.flt(values.get("amount"))
+    if amount <= 0:
+        frappe.throw(_("Amount must be greater than zero."))
+
+    meta = frappe.get_meta(RETAILEDGE_EXPENSE_DOCTYPE)
+    request_id = str(values.get("client_request_id") or "").strip()
+    if request_id and meta.has_field("client_request_id"):
+        existing_name = frappe.db.get_value(
+            RETAILEDGE_EXPENSE_DOCTYPE,
+            {"client_request_id": request_id},
+            "name",
+        )
+        if existing_name:
+            existing = frappe.get_doc(RETAILEDGE_EXPENSE_DOCTYPE, existing_name)
+            if not existing.has_permission("read"):
+                frappe.throw(
+                    _("You do not have access to the existing Cashier Expense."),
+                    frappe.PermissionError,
+                )
+            return _legacy_expense_result(existing, idempotent=True)
+
+    legacy_context_method = _get_retailedge_method(RETAILEDGE_LEGACY_CONTEXT_METHOD)
+    legacy_context = legacy_context_method() if legacy_context_method else {}
+    settings = (legacy_context or {}).get("settings") or {}
+
+    doc = frappe.new_doc(RETAILEDGE_EXPENSE_DOCTYPE)
+    doc.expense_category = category
+    doc.amount = amount
+    if values.get("description"):
+        doc.description = str(values.get("description")).strip()
+    if values.get("expense_date") and frappe.utils.cint(
+        settings.get("allow_cashier_expense_date_edit", 0)
+    ):
+        doc.expense_date = frappe.utils.getdate(values.get("expense_date"))
+
+    if request_id and meta.has_field("client_request_id"):
+        doc.client_request_id = request_id
+    if meta.has_field("entry_source"):
+        doc.entry_source = "POSNext"
+    if meta.has_field("cash_source"):
+        doc.cash_source = "POS Till"
+    if meta.has_field("cash_movement_status"):
+        doc.cash_movement_status = "Disbursed"
+
+    # The installed RetailEdge controller remains authoritative: before_validate
+    # resolves cashier/company/branch/POS/account context and validates available
+    # till cash. The extension supplies only the cashier-entered fields.
+    doc.insert()
+    doc.submit()
+    return _legacy_expense_result(
+        frappe.get_doc(RETAILEDGE_EXPENSE_DOCTYPE, doc.name),
+        idempotent=False,
+    )
+
+
+@frappe.whitelist()
+def get_cashier_expense_bridge_context(pos_profile=None, opening_shift=None):
+    """Return a permission-aware RetailEdge POS expense context.
+
+    New RetailEdge installations use the dedicated POS bridge. Pre-EdgeSuite
+    installations fall back to the original RetailEdge Cashier Expense controller
+    while the POSNext extension owns only the modal presentation.
+    """
+    capability_method = _get_retailedge_method(RETAILEDGE_CAPABILITY_METHOD)
+    if not capability_method:
+        return _legacy_cashier_expense_bridge_context(
+            pos_profile=pos_profile,
+            opening_shift=opening_shift,
+        )
 
     capabilities = capability_method(
         pos_profile=pos_profile,
@@ -114,6 +399,9 @@ def get_cashier_expense_bridge_context(pos_profile=None, opening_shift=None):
     response = {
         "available": 1,
         **capabilities,
+        "bridge_mode": "modern_retailedge",
+        "ui_mode": "posnext_extension",
+        "requires_edgesuite": 0,
         "categories": [],
         "guided": {},
     }
@@ -124,6 +412,19 @@ def get_cashier_expense_bridge_context(pos_profile=None, opening_shift=None):
     guided_method = _get_retailedge_method(RETAILEDGE_GUIDED_CONTEXT_METHOD)
     category_method = _get_retailedge_method(RETAILEDGE_CATEGORY_SEARCH_METHOD)
     if not guided_method or not category_method:
+        legacy = _legacy_cashier_expense_bridge_context(
+            pos_profile=pos_profile,
+            opening_shift=opening_shift,
+        )
+        if legacy.get("available"):
+            legacy["enabled"] = capabilities.get("enabled", legacy.get("enabled", 1))
+            legacy["show_action"] = capabilities.get(
+                "show_action", legacy.get("show_action", 1)
+            )
+            legacy["posting_mode"] = capabilities.get(
+                "posting_mode", legacy.get("posting_mode")
+            )
+            return legacy
         response["ready"] = 0
         response["reason"] = _("RetailEdge Cashier Expense entry services are unavailable.")
         return response
@@ -141,12 +442,19 @@ def get_cashier_expense_bridge_context(pos_profile=None, opening_shift=None):
 
 @frappe.whitelist()
 def search_cashier_expense_categories(txt="", company=None, limit=20):
-    method = _require_retailedge_method(RETAILEDGE_CATEGORY_SEARCH_METHOD)
-    return method(txt=txt or "", company=company or None, limit=limit)
+    method = _get_retailedge_method(RETAILEDGE_CATEGORY_SEARCH_METHOD)
+    if method:
+        return method(txt=txt or "", company=company or None, limit=limit)
+    return _search_legacy_cashier_expense_categories(
+        txt=txt or "",
+        company=company or None,
+        limit=limit,
+    )
 
 
 @frappe.whitelist(methods=["POST"])
 def create_retailedge_cashier_expense(values=None):
-    method = _require_retailedge_method(RETAILEDGE_CREATE_METHOD)
-    return method(values=values)
-
+    method = _get_retailedge_method(RETAILEDGE_CREATE_METHOD)
+    if method:
+        return method(values=values)
+    return _create_legacy_retailedge_cashier_expense(values=values)
