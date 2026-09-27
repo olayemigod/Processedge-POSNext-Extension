@@ -1248,13 +1248,18 @@
 
     const permissionBlocked = (dialog.textContent || "").includes("Permission Required");
     const canCreateWithoutPhone = !permissionBlocked && customerIdentityIsReady(dialog);
+    const shouldDisable = !canCreateWithoutPhone;
 
-    nativeCreateButton.disabled = !canCreateWithoutPhone;
+    // Keep this idempotent. The POS bridge also observes Vue DOM changes; repeatedly
+    // rewriting the same disabled attribute can create a self-sustaining
+    // MutationObserver loop that leaves the checkout page effectively frozen.
+    if (nativeCreateButton.disabled !== shouldDisable) {
+      nativeCreateButton.disabled = shouldDisable;
+    }
+
     if (canCreateWithoutPhone) {
-      nativeCreateButton.removeAttribute("disabled");
       nativeCreateButton.setAttribute("data-processedge-phone-optional-enabled", "1");
     } else {
-      nativeCreateButton.setAttribute("disabled", "");
       nativeCreateButton.removeAttribute("data-processedge-phone-optional-enabled");
     }
   }
@@ -1541,8 +1546,6 @@
     STATE.observer.observe(document.body, {
       childList: true,
       characterData: true,
-      attributes: true,
-      attributeFilter: ["disabled"],
       subtree: true,
     });
   }

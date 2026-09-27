@@ -30,9 +30,11 @@ def test_bridge_stands_down_when_native_mobile_fix_exists():
     )
 
 
-def test_observer_tracks_disabled_state_changes():
-    assert "attributes: true" in SOURCE
-    assert 'attributeFilter: ["disabled"]' in SOURCE
+def test_observer_does_not_watch_disabled_attributes_globally():
+    # Disabled-state refresh is event-driven. Watching every disabled mutation
+    # makes customer/dialog controls capable of recursively retriggering patchUI.
+    assert "attributes: true" not in SOURCE
+    assert 'attributeFilter: ["disabled"]' not in SOURCE
 
 
 def test_partial_payment_bridge_runs_independently_of_posting_date_setting():
