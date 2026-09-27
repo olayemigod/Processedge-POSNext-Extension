@@ -51,3 +51,34 @@ def test_pos_modal_remains_extension_owned_and_edgesuite_free():
     assert "async function openCashierExpenseDialog()" in JS_SOURCE
     assert 'document.createElement("div")' in JS_SOURCE
     assert "window.EdgeSuiteUI" not in JS_SOURCE
+
+
+def test_legacy_submit_can_use_active_pos_shift_operational_authorization():
+    assert "def _legacy_pos_operational_submit_authorized" in API_SOURCE
+    assert 'frappe.db.exists("POS Opening Shift", shift)' in API_SOURCE
+    assert 'frappe.db.get_value("POS Opening Shift", shift, "user")' in API_SOURCE
+    assert "if not can_submit and not operational_submit" in API_SOURCE
+    assert "doc.flags.ignore_permissions = True" in API_SOURCE
+
+
+def test_native_pos_expense_is_captured_before_vue_dialog_opens():
+    assert "function bindNativePOSExpenseRouting" in JS_SOURCE
+    assert 'title === "Record POS expense"' in JS_SOURCE
+    assert "event.stopImmediatePropagation()" in JS_SOURCE
+    assert "openCashierExpenseDialog();" in JS_SOURCE
+    boot_start = JS_SOURCE.index("async function boot()")
+    boot_source = JS_SOURCE[boot_start:]
+    assert "bindNativePOSExpenseRouting();" in boot_source
+
+
+def test_cashier_expense_dialog_refreshes_bridge_on_every_open():
+    open_start = JS_SOURCE.index("async function openCashierExpenseDialog()")
+    open_source = JS_SOURCE[open_start:open_start + 500]
+    assert "await loadCashierExpenseBridge();" in open_source
+
+
+def test_floating_expense_button_uses_new_right_side_default_and_larger_mobile_size():
+    assert '"processedge.cashierExpenseFloatingPosition.v2"' in JS_SOURCE
+    assert '"right:" + (compact ? "14px" : "20px")' in JS_SOURCE
+    assert '"width:" + (compact ? "48px" : "auto")' in JS_SOURCE
+    assert '"height:" + (compact ? "48px" : "48px")' in JS_SOURCE
