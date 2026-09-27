@@ -223,9 +223,14 @@ def test_optional_customer_phone_runtime_contract():
     assert 'doc.require_customer_phone =' not in pos_settings
     assert 'if not posnext_supports_customer_phone_policy()' in pos_settings
     assert '"pos_next.api.customers.create_customer"' in js
-    assert "data-processedge-create-customer-without-phone" in js
     assert "native_customer_phone_policy" in js
     assert "if (requirePhone || nativePhonePolicy)" in js
+    assert "bindLegacyOptionalPhoneButton" in js
+    assert "customerIdentityIsReady" in js
+    assert "data-processedge-phone-optional-enabled" in js
+    assert "data-processedge-phone-optional-label" in js
+    assert "stopImmediatePropagation" in js
+    assert "Create without phone" not in js
     assert "findVueComponentInstance" in js
     assert r'replace(/\*/g, "")' in js
     assert r'replace(/\\*/g, "")' not in js

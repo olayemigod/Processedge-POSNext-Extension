@@ -1182,8 +1182,92 @@
     } finally {
       button.dataset.processedgeSubmitting = "0";
       button.disabled = false;
-      button.textContent = previousText || "Create without phone";
+      button.textContent = previousText || "Create Customer";
     }
+  }
+
+  function customerIdentityIsReady(dialog) {
+    const firstNameField = findDialogField(dialog, "First Name");
+    const lastNameField = findDialogField(dialog, "Last Name");
+
+    if (firstNameField || lastNameField) {
+      return Boolean(
+        firstNameField &&
+          lastNameField &&
+          String(firstNameField.value || "").trim() &&
+          String(lastNameField.value || "").trim()
+      );
+    }
+
+    return Boolean(fieldValue(dialog, "Customer Name"));
+  }
+
+  function markPhoneOptional(dialog) {
+    const phoneLabel = Array.from(dialog.querySelectorAll("label")).find(
+      (item) => normalizedLabelText(item.textContent) === "Mobile Number"
+    );
+    if (!phoneLabel) return;
+
+    const requiredMarker = Array.from(phoneLabel.querySelectorAll("span")).find(
+      (item) => String(item.textContent || "").trim() === "*"
+    );
+    if (requiredMarker) {
+      requiredMarker.style.display = "none";
+      requiredMarker.setAttribute("data-processedge-phone-required-marker", "hidden");
+    }
+
+    if (!phoneLabel.querySelector("[data-processedge-phone-optional-label]")) {
+      const optional = document.createElement("span");
+      optional.setAttribute("data-processedge-phone-optional-label", "1");
+      optional.className = "text-xs text-gray-400 ms-1";
+      optional.textContent = "(optional)";
+      phoneLabel.appendChild(optional);
+    }
+  }
+
+  function bindLegacyOptionalPhoneButton(dialog, nativeCreateButton) {
+    if (!dialog || !nativeCreateButton) return;
+
+    if (!nativeCreateButton.dataset.processedgeOptionalPhoneBound) {
+      nativeCreateButton.dataset.processedgeOptionalPhoneBound = "1";
+      nativeCreateButton.addEventListener(
+        "click",
+        (event) => {
+          if (!isBlankCustomerPhone(dialog)) return;
+
+          event.preventDefault();
+          event.stopPropagation();
+          if (typeof event.stopImmediatePropagation === "function") {
+            event.stopImmediatePropagation();
+          }
+          createCustomerWithoutPhone(dialog, nativeCreateButton);
+        },
+        true
+      );
+    }
+
+    const permissionBlocked = (dialog.textContent || "").includes("Permission Required");
+    const canCreateWithoutPhone = !permissionBlocked && customerIdentityIsReady(dialog);
+
+    nativeCreateButton.disabled = !canCreateWithoutPhone;
+    if (canCreateWithoutPhone) {
+      nativeCreateButton.removeAttribute("disabled");
+      nativeCreateButton.setAttribute("data-processedge-phone-optional-enabled", "1");
+    } else {
+      nativeCreateButton.setAttribute("disabled", "");
+      nativeCreateButton.removeAttribute("data-processedge-phone-optional-enabled");
+    }
+  }
+
+  function bindLegacyOptionalPhoneInputs(dialog) {
+    ["Customer Name", "First Name", "Last Name", "Mobile Number"].forEach((labelText) => {
+      const input = findDialogField(dialog, labelText);
+      if (!input || input.dataset.processedgeOptionalPhoneInputBound) return;
+
+      input.dataset.processedgeOptionalPhoneInputBound = "1";
+      input.addEventListener("input", () => injectOptionalCustomerPhoneAction());
+      input.addEventListener("change", () => injectOptionalCustomerPhoneAction());
+    });
   }
 
   function injectOptionalCustomerPhoneAction() {
@@ -1196,10 +1280,11 @@
       Number(STATE.settings && STATE.settings.native_customer_phone_policy)
     );
 
+    document
+      .querySelectorAll("[data-processedge-create-customer-without-phone]")
+      .forEach((node) => node.remove());
+
     if (requirePhone || nativePhonePolicy) {
-      document
-        .querySelectorAll("[data-processedge-create-customer-without-phone]")
-        .forEach((node) => node.remove());
       return;
     }
 
@@ -1211,41 +1296,20 @@
       const text = dialog.textContent || "";
       if (!text.includes("Create New Customer")) return;
 
-      const phoneInput = findDialogField(dialog, "Mobile Number");
-      if (phoneInput && !phoneInput.dataset.processedgeOptionalPhoneBound) {
-        phoneInput.dataset.processedgeOptionalPhoneBound = "1";
-        phoneInput.addEventListener("input", injectOptionalCustomerPhoneAction);
-      }
-
-      const existing = dialog.querySelector("[data-processedge-create-customer-without-phone]");
-      if (!isBlankCustomerPhone(dialog)) {
-        if (existing) existing.remove();
-        return;
-      }
-      if (existing) return;
+      markPhoneOptional(dialog);
+      bindLegacyOptionalPhoneInputs(dialog);
 
       const nativeCreateButton = Array.from(dialog.querySelectorAll("button")).find(
         (item) => (item.textContent || "").trim() === "Create Customer"
       );
-      const cancelButton = Array.from(dialog.querySelectorAll("button")).find(
-        (item) => (item.textContent || "").trim() === "Cancel"
-      );
-      const actions = (nativeCreateButton && nativeCreateButton.parentElement) || (cancelButton && cancelButton.parentElement);
-      if (!actions) return;
+      if (!nativeCreateButton) return;
 
-      const button = document.createElement("button");
-      button.type = "button";
-      button.setAttribute("data-processedge-create-customer-without-phone", "1");
-      button.textContent = "Create without phone";
-      button.className =
-        "inline-flex items-center justify-center rounded-md bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700";
-      button.addEventListener("click", () => createCustomerWithoutPhone(dialog, button));
-
-      if (cancelButton && cancelButton.parentElement === actions) {
-        actions.insertBefore(button, cancelButton);
-      } else {
-        actions.appendChild(button);
+      if (!isBlankCustomerPhone(dialog)) {
+        nativeCreateButton.removeAttribute("data-processedge-phone-optional-enabled");
+        return;
       }
+
+      bindLegacyOptionalPhoneButton(dialog, nativeCreateButton);
     });
   }
 
