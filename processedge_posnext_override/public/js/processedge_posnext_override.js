@@ -1321,7 +1321,16 @@
       .trim();
   }
 
-  function findDesktopPartialPaymentButton(dialog) {
+  function isNativeCompletionButton(button) {
+    const text = normalizedButtonText(button);
+    return (
+      text === "Complete Payment" ||
+      text === "Partial Payment" ||
+      text === "Processing..."
+    );
+  }
+
+  function findDesktopCompletionButton(dialog) {
     if (!dialog) return null;
 
     const desktopRows = Array.from(
@@ -1329,13 +1338,35 @@
     );
 
     for (const row of desktopRows) {
-      const button = Array.from(row.querySelectorAll("button")).find(
-        (item) => normalizedButtonText(item) === "Partial Payment"
-      );
-      if (button) return button;
+      const buttons = Array.from(row.querySelectorAll("button"));
+      if (!buttons.length) continue;
+
+      // POSNext renders the completion action last in the desktop action row.
+      // Prefer the semantic label when available, but fall back to the final
+      // button so translations do not break the compatibility bridge.
+      const semantic = buttons.find(isNativeCompletionButton);
+      if (semantic) return semantic;
+
+      return buttons[buttons.length - 1] || null;
     }
 
     return null;
+  }
+
+  function findMobilePaymentSection(dialog) {
+    if (!dialog) return null;
+
+    const explicit = dialog.querySelector("div.lg\\:hidden.flex.flex-col");
+    if (explicit) return explicit;
+
+    // Fallback for minor upstream class changes: find the mobile-only section
+    // containing the remaining-balance Pay action.
+    return Array.from(dialog.querySelectorAll("div")).find((node) => {
+      if (!node.classList || !node.classList.contains("lg:hidden")) return false;
+      return Array.from(node.querySelectorAll("button")).some((button) =>
+        /^Pay\s+/i.test(normalizedButtonText(button))
+      );
+    }) || null;
   }
 
   function removeMobilePartialPaymentBridge(scope) {
@@ -1351,41 +1382,53 @@
     );
 
     dialogs.forEach((dialog) => {
-      const existingBridge = dialog.querySelector(`[${MOBILE_PARTIAL_PAYMENT_ATTR}]`);
-      const desktopPartialButton = findDesktopPartialPaymentButton(dialog);
+      const mobileSection = findMobilePaymentSection(dialog);
+      if (!mobileSection) return;
 
-      // POSNext's shared canComplete/paymentButtonText logic is already correct.
-      // The pending upstream fix only exposes that action on mobile. If the
-      // desktop action is not currently a valid partial-payment action, remove
-      // any bridge we previously injected.
-      if (!desktopPartialButton) {
-        if (existingBridge) existingBridge.remove();
-        return;
-      }
+      const existingBridge = mobileSection.querySelector(
+        `[${MOBILE_PARTIAL_PAYMENT_ATTR}]`
+      );
 
-      const desktopRow = desktopPartialButton.parentElement;
-      const rightColumn = desktopRow && desktopRow.parentElement;
-      const mobileSection =
-        rightColumn && rightColumn.querySelector("div.lg\\:hidden.flex.flex-col");
-
-      if (!mobileSection) {
-        if (existingBridge) existingBridge.remove();
-        return;
-      }
-
-      // Upgrade-safe: once BrainWise ships the native mobile fix, the native
-      // button will already render "Partial Payment". In that case the
-      // extension removes its compatibility bridge and does nothing else.
-      const nativeMobilePartialButton = Array.from(
+      // If BrainWise has shipped the native mobile completion/partial action,
+      // the extension must immediately stand down to avoid duplicate controls.
+      const nativeMobileCompletionButton = Array.from(
         mobileSection.querySelectorAll("button")
       ).find(
         (button) =>
           !button.hasAttribute(MOBILE_PARTIAL_PAYMENT_ATTR) &&
-          normalizedButtonText(button) === "Partial Payment"
+          isNativeCompletionButton(button)
       );
 
-      if (nativeMobilePartialButton) {
+      if (nativeMobileCompletionButton) {
         removeMobilePartialPaymentBridge(mobileSection);
+        return;
+      }
+
+      const desktopCompletionButton = findDesktopCompletionButton(dialog);
+
+      // This is the key compatibility signal. POSNext already computes
+      // canComplete correctly for partial payments. When the desktop completion
+      // action is enabled but the mobile completion action is absent, we are in
+      // the exact mobile partial-payment gap fixed by the pending upstream PR.
+      if (!desktopCompletionButton || desktopCompletionButton.disabled) {
+        if (existingBridge) existingBridge.remove();
+        return;
+      }
+
+      // Avoid showing the bridge before any amount has actually been entered.
+      // The mobile section's ordinary "Pay <remaining>" action is present while
+      // an outstanding amount remains; when fully paid POSNext renders its
+      // native completion button instead and the branch above stands down.
+      const hasOutstandingPayAction = Array.from(
+        mobileSection.querySelectorAll("button")
+      ).some(
+        (button) =>
+          !button.hasAttribute(MOBILE_PARTIAL_PAYMENT_ATTR) &&
+          /^Pay\s+/i.test(normalizedButtonText(button))
+      );
+
+      if (!hasOutstandingPayAction) {
+        if (existingBridge) existingBridge.remove();
         return;
       }
 
@@ -1398,28 +1441,15 @@
         mobileButton.className =
           "w-full inline-flex items-center justify-center gap-2 text-sm font-semibold px-5 rounded-lg bg-blue-600 text-white active:bg-blue-800 focus:outline-none";
         mobileButton.style.cssText =
-          "width:100%;min-height:40px;border:0;border-radius:8px;padding:8px 16px;font-weight:700;";
+          "width:100%;min-height:40px;border:0;border-radius:8px;padding:8px 16px;font-weight:700;cursor:pointer;";
 
         mobileButton.addEventListener("click", function () {
-          const currentDesktopButton = findDesktopPartialPaymentButton(dialog);
+          const currentDesktopButton = findDesktopCompletionButton(dialog);
           if (!currentDesktopButton || currentDesktopButton.disabled) return;
           currentDesktopButton.click();
         });
 
         mobileSection.appendChild(mobileButton);
-      }
-
-      const shouldDisable = !!desktopPartialButton.disabled;
-      if (mobileButton.disabled !== shouldDisable) {
-        mobileButton.disabled = shouldDisable;
-      }
-      const nextCursor = shouldDisable ? "not-allowed" : "pointer";
-      if (mobileButton.style.cursor !== nextCursor) {
-        mobileButton.style.cursor = nextCursor;
-      }
-      const nextOpacity = shouldDisable ? "0.6" : "1";
-      if (mobileButton.style.opacity !== nextOpacity) {
-        mobileButton.style.opacity = nextOpacity;
       }
     });
   }
@@ -1466,6 +1496,8 @@
     STATE.observer.observe(document.body, {
       childList: true,
       characterData: true,
+      attributes: true,
+      attributeFilter: ["disabled"],
       subtree: true,
     });
   }
