@@ -39,7 +39,7 @@ jobs:
         run: node --check processedge_posnext_override/public/js/processedge_posnext_override.js
 
       - name: Validate release metadata
-        run: python -m pytest -q processedge_posnext_override/tests/test_release_metadata.py processedge_posnext_override/tests/test_pos_page_injection.py processedge_posnext_override/tests/test_mobile_partial_payment_bridge.py processedge_posnext_override/tests/test_legacy_cashier_expense_bridge.py processedge_posnext_override/tests/test_legacy_cashier_expense_closing.py processedge_posnext_override/tests/test_customer_controls_freeze.py
+        run: python -m pytest -q processedge_posnext_override/tests/test_release_metadata.py processedge_posnext_override/tests/test_pos_page_injection.py processedge_posnext_override/tests/test_mobile_partial_payment_bridge.py processedge_posnext_override/tests/test_legacy_cashier_expense_bridge.py processedge_posnext_override/tests/test_legacy_cashier_expense_closing.py processedge_posnext_override/tests/test_customer_controls_freeze.py processedge_posnext_override/tests/test_posting_date_payment_dialog.py
 
       - name: Build Python package
         run: python -m build

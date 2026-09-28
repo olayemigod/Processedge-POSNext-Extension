@@ -852,19 +852,42 @@
     window.fetch = patched;
   }
 
+  function findPaymentDialogLeftColumn(dialogBody) {
+    if (!dialogBody) return null;
+
+    return (
+      Array.from(dialogBody.querySelectorAll("div")).find((node) => {
+        const classes = node.classList;
+        return (
+          classes &&
+          classes.contains("lg:col-span-2") &&
+          classes.contains("flex") &&
+          classes.contains("flex-col")
+        );
+      }) || null
+    );
+  }
+
   function createPostingDateField(dialogBody) {
     if (!dialogBody || dialogBody.querySelector("[data-processedge-posting-date]")) {
       return;
     }
 
-    const target = dialogBody.querySelector(".bg-orange-50, .lg\\:col-span-2, .grid");
-    if (!target || !target.parentNode) {
+    // PaymentDialog owns a five-column root grid with exactly two structural
+    // children: left column (2/5) and payment column (3/5). The posting-date
+    // control must live INSIDE the left column. Adding another direct grid child
+    // changes the native column allocation and can make Sales Person selection
+    // and the partial-payment surface unusable.
+    const leftColumn = findPaymentDialogLeftColumn(dialogBody);
+    if (!leftColumn) {
       return;
     }
 
     const wrapper = document.createElement("div");
     wrapper.setAttribute("data-processedge-posting-date", "1");
-    wrapper.className = "bg-blue-50 border border-blue-200 rounded-lg p-2";
+    wrapper.setAttribute("data-processedge-posting-date-placement", "payment-left-column");
+    wrapper.className =
+      "bg-blue-50 border border-blue-200 rounded-lg p-2 flex-shrink-0";
     wrapper.innerHTML = [
       '<div class="flex items-center gap-2">',
       '<svg class="w-4 h-4 text-blue-600 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">',
@@ -880,10 +903,11 @@
     if (input) {
       input.addEventListener("change", function (event) {
         syncPostingDateInputs(event.target.value, event.target);
+        schedulePaymentBridgeRefresh();
       });
     }
 
-    target.parentNode.insertBefore(wrapper, target);
+    leftColumn.insertBefore(wrapper, leftColumn.firstChild || null);
   }
 
   function syncPostingDateInputs(value, source) {
