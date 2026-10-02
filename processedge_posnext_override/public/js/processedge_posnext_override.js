@@ -341,11 +341,17 @@
   }
 
   function submittedInvoiceFromResponse(payload) {
-    const message =
-      payload && Object.prototype.hasOwnProperty.call(payload, "message")
+    const result =
+      payload &&
+      typeof payload === "object" &&
+      Object.prototype.hasOwnProperty.call(payload, "message") &&
+      payload.message &&
+      typeof payload.message === "object"
         ? payload.message
-        : payload;
-    const result = message?.message || message || {};
+        : payload && typeof payload === "object"
+          ? payload
+          : {};
+
     const name = String(result?.name || "").trim();
     if (!name) return null;
     return {
