@@ -356,6 +356,28 @@
     };
   }
 
+  function requestContainsOfflineInvoice(init) {
+    const body = init?.body;
+    if (!body) return false;
+
+    const hasOfflineId = (value) =>
+      typeof value === "string" && /(?:^|["&])offline_id(?:["=]|%22)/i.test(value);
+
+    if (typeof URLSearchParams !== "undefined" && body instanceof URLSearchParams) {
+      if (body.get("offline_id")) return true;
+      return Array.from(body.values()).some((value) => hasOfflineId(String(value)));
+    }
+    if (typeof FormData !== "undefined" && body instanceof FormData) {
+      if (body.get("offline_id")) return true;
+      let found = false;
+      body.forEach((value) => {
+        if (!found && hasOfflineId(String(value))) found = true;
+      });
+      return found;
+    }
+    return hasOfflineId(String(body));
+  }
+
   async function observeSubmittedInvoiceResponse(url, response) {
     if (
       !edgeSuitePrintingEnabled() ||
@@ -1169,7 +1191,8 @@
         shouldObservePrinting &&
         url &&
         isPOSPage() &&
-        url.includes(SUBMIT_INVOICE_ENDPOINT)
+        url.includes(SUBMIT_INVOICE_ENDPOINT) &&
+        !requestContainsOfflineInvoice(nextInit)
       ) {
         observeSubmittedInvoiceResponse(url, response).catch((error) => {
           console.warn("ProcessEdge POS: submit print observation failed", error);
