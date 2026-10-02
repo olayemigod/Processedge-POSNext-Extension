@@ -17,6 +17,7 @@
     printing: {
       lastSubmittedInvoice: null,
       autoPrintedInvoices: new Set(),
+      autoPrintInFlightInvoices: new Set(),
       busy: false,
     },
   };
@@ -281,7 +282,11 @@
           "EdgeSuite receipt printing is not enabled for this POS."
       );
     }
-    if (automatic && STATE.printing.autoPrintedInvoices.has(name)) {
+    if (
+      automatic &&
+      (STATE.printing.autoPrintedInvoices.has(name) ||
+        STATE.printing.autoPrintInFlightInvoices.has(name))
+    ) {
       return { printed: false, duplicate: true, name };
     }
 
@@ -294,6 +299,7 @@
     }
 
     STATE.printing.busy = true;
+    if (automatic) STATE.printing.autoPrintInFlightInvoices.add(name);
     try {
       const payload = await callAPI(EDGE_RECEIPT_METHOD, { invoice_name: name });
       if (!payload?.available) {
@@ -336,6 +342,7 @@
       );
       return { printed: true, name, copies, results, profile };
     } finally {
+      if (automatic) STATE.printing.autoPrintInFlightInvoices.delete(name);
       STATE.printing.busy = false;
     }
   }
@@ -417,6 +424,33 @@
     }
   }
 
+  function isLocalOnlyReceiptName(name) {
+    return /^pos_offline_/i.test(String(name || "").trim());
+  }
+
+  function scheduleDialogEdgeSuiteAutoPrint(name) {
+    const invoiceName = String(name || "").trim();
+    if (
+      !invoiceName ||
+      isLocalOnlyReceiptName(invoiceName) ||
+      !edgeSuiteAutoPrintEnabled() ||
+      STATE.printing.autoPrintedInvoices.has(invoiceName) ||
+      STATE.printing.autoPrintInFlightInvoices.has(invoiceName)
+    ) {
+      return;
+    }
+
+    window.setTimeout(() => {
+      printEdgeSuiteInvoice(invoiceName, { automatic: true }).catch((error) => {
+        console.warn("ProcessEdge POS: dialog-triggered EdgeSuite auto-print failed", error);
+        showPOSAlert(
+          "Sale completed, but the EdgeSuite receipt did not print. Use Print Receipt to retry.",
+          "orange"
+        );
+      });
+    }, 0);
+  }
+
   function successDialogInvoiceName(dialog) {
     const remembered = String(STATE.printing.lastSubmittedInvoice?.name || "").trim();
     if (remembered) return remembered;
@@ -439,6 +473,9 @@
     });
 
     dialogs.forEach((dialog) => {
+      const dialogInvoiceName = successDialogInvoiceName(dialog);
+      scheduleDialogEdgeSuiteAutoPrint(dialogInvoiceName);
+
       if (dialog.querySelector("[data-processedge-edgesuite-print-receipt]")) return;
 
       const dialogButtons = Array.from(dialog.querySelectorAll("button"));
