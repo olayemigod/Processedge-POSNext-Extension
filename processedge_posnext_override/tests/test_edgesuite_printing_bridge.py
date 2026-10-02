@@ -103,6 +103,17 @@ def test_browser_bridge_observes_only_successful_fresh_online_submissions():
     assert "offline_id" in source
 
 
+def test_submit_response_parser_keeps_frappe_result_object_not_inner_message_text():
+    source = JS.read_text()
+    parser = source.split("function submittedInvoiceFromResponse(payload)", 1)[1].split(
+        "async function observeSubmittedInvoiceResponse", 1
+    )[0]
+
+    assert 'typeof payload.message === "object"' in parser
+    assert 'String(result?.name || "")' in parser
+    assert "message?.message || message" not in parser
+
+
 def test_pos_receipt_printing_uses_only_shared_edgesuite_transport():
     source = JS.read_text()
 
