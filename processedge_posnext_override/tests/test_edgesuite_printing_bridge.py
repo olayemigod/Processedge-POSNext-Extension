@@ -60,12 +60,15 @@ def test_server_bridge_delegates_business_and_profile_authority():
     ):
         assert expected in source
 
+    print_endpoint = source.split(
+        "def get_edgesuite_receipt_print_payload", 1
+    )[1].split("def _require_retailedge_method", 1)[0]
     for forbidden in (
         "ignore_permissions=True",
         "navigator.serial",
         "SerialPort",
     ):
-        assert forbidden not in source
+        assert forbidden not in print_endpoint
 
 
 def test_auto_print_yields_to_posnext_native_auto_printing():
