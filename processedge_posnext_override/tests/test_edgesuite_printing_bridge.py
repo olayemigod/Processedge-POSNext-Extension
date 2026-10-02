@@ -140,6 +140,18 @@ def test_pos_receipt_printing_uses_only_shared_edgesuite_transport():
         assert forbidden not in source
 
 
+def test_receipt_success_action_uses_invoice_identity_before_english_copy():
+    source = JS.read_text()
+    section = source.split("function injectEdgeSuiteReceiptAction()", 1)[1].split(
+        "async function loadCashierExpenseBridge", 1
+    )[0]
+
+    assert "rememberedName" in section
+    assert "text.includes(rememberedName)" in section
+    assert "actionGroups.at(-1)" in section
+    assert "/Print Invoice/i" in section
+
+
 def test_pos_exposes_persistent_printer_setup_action():
     source = JS.read_text()
 
