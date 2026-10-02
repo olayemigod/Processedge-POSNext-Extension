@@ -129,6 +129,24 @@ def test_pos_receipt_printing_uses_only_shared_edgesuite_transport():
         assert forbidden not in source
 
 
+def test_pos_exposes_persistent_printer_setup_action():
+    source = JS.read_text()
+
+    for expected in (
+        "function injectEdgeSuitePrinterAction()",
+        'data-processedge-printer-action',
+        '"Receipt Printer — Connected"',
+        '"Receipt Printer — Setup"',
+        'createPrinterActionButton("sidebar")',
+        'createPrinterActionButton("header")',
+        "openEdgeSuitePrinterSetup({",
+        "injectEdgeSuitePrinterAction();",
+    ):
+        assert expected in source
+
+    assert "edgeSuitePrinterConnected()" in source
+
+
 def test_edgesuite_auto_print_is_session_deduplicated_and_post_transaction():
     source = JS.read_text()
 
