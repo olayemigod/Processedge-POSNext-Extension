@@ -361,7 +361,7 @@
     if (!body) return false;
 
     const hasOfflineId = (value) =>
-      typeof value === "string" && /(?:^|["&])offline_id(?:["=]|%22)/i.test(value);
+      typeof value === "string" && value.toLowerCase().includes("offline_id");
 
     if (typeof URLSearchParams !== "undefined" && body instanceof URLSearchParams) {
       if (body.get("offline_id")) return true;
