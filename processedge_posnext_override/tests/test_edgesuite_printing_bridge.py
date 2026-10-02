@@ -186,3 +186,23 @@ def test_offline_printing_remains_posnext_owned():
     assert "offline_id" in source
     assert "cacheOfflineReceiptPayload" not in source
     assert "Offline Invoice Sync" not in source
+
+
+def test_pos_printer_setup_action_is_discoverable_on_desktop_and_mobile():
+    source = JS.read_text()
+
+    for expected in (
+        "function injectEdgeSuitePrinterAction()",
+        "function createPrinterActionButton",
+        "data-processedge-printer-action",
+        "Receipt Printer — Setup",
+        "Receipt Printer — Connected",
+        "button[title='POS Next'], button[aria-label='POS Next']",
+        "settingsButton",
+        "injectEdgeSuitePrinterAction();",
+        'purpose: "Receipt"',
+        'product_key: "retailedge"',
+        'params.set("company", company)',
+        'params.set("branch", branch)',
+    ):
+        assert expected in source
