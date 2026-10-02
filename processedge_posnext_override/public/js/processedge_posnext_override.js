@@ -14,6 +14,11 @@
       requestId: null,
       searchTimer: null,
     },
+    printing: {
+      lastSubmittedInvoice: null,
+      autoPrintedInvoices: new Set(),
+      busy: false,
+    },
   };
 
   function isPOSPage() {
@@ -29,6 +34,9 @@
     "processedge_posnext_override.api.create_retailedge_cashier_expense",
     "pos_next.api.customers.create_customer",
   ]);
+  const SUBMIT_INVOICE_ENDPOINT = "pos_next.api.invoices.submit_invoice";
+  const EDGE_RECEIPT_METHOD =
+    "processedge_posnext_override.api.get_edgesuite_receipt_print_payload";
 
   function apiArgs(args) {
     const params = new URLSearchParams();
@@ -134,11 +142,312 @@
         allow_editing_posting_date: 0,
         require_customer_phone: 1,
         native_customer_phone_policy: 0,
+        edgesuite_receipt_printing_enabled: 0,
+        edgesuite_auto_print_requested: 0,
+        edgesuite_auto_print_effective: 0,
+        edgesuite_printing_available: 0,
+        edgesuite_printing_reason: "",
+        posnext_native_auto_print: 0,
+        posnext_silent_print: 0,
+        company: "",
+        branch: "",
       };
       STATE.postingDate = getToday();
     }
   }
 
+
+  function sharedPrintAdapter() {
+    return (
+      window.EdgeSuitePrint ||
+      window.EdgeSuiteUI?.print ||
+      window.EdgeSuiteUI?.getAdapter?.("print") ||
+      null
+    );
+  }
+
+  function edgeSuitePrintingEnabled() {
+    return Boolean(
+      STATE.settings &&
+        Number(STATE.settings.edgesuite_receipt_printing_enabled || 0) &&
+        Number(STATE.settings.edgesuite_printing_available || 0)
+    );
+  }
+
+  function edgeSuiteAutoPrintEnabled() {
+    return Boolean(
+      edgeSuitePrintingEnabled() &&
+        Number(STATE.settings.edgesuite_auto_print_effective || 0)
+    );
+  }
+
+  function edgeSuitePrinterSetupUrl(context = {}) {
+    const params = new URLSearchParams({
+      purpose: "Receipt",
+      product_key: "retailedge",
+    });
+    const company = String(context.company || STATE.settings?.company || "").trim();
+    const branch = String(context.branch || STATE.settings?.branch || "").trim();
+    if (company) params.set("company", company);
+    if (branch) params.set("branch", branch);
+    return `/app/edge-printing?${params.toString()}`;
+  }
+
+  function openEdgeSuitePrinterSetup(context = {}) {
+    const url = edgeSuitePrinterSetupUrl(context);
+    const opened = window.open(url, "_blank", "noopener,noreferrer");
+    if (!opened) {
+      showPOSAlert("Open Devices & Printing from RetailEdge Business Setup.", "orange");
+      return false;
+    }
+    return true;
+  }
+
+  function printError(code, message, cause) {
+    const error = new Error(message);
+    error.code = code;
+    if (cause) error.cause = cause;
+    return error;
+  }
+
+  async function ensureEdgeSuitePrinter(adapter, profile) {
+    if (!adapter?.devices || !adapter?.profiles || typeof adapter.printReceipt !== "function") {
+      throw printError(
+        "PROCESS_EDGE_PRINT_RUNTIME_UNAVAILABLE",
+        "The EdgeSuite receipt printer runtime is not available on this POS page."
+      );
+    }
+    if (!profile || profile.transport !== "serial") {
+      throw printError(
+        "PROCESS_EDGE_SERIAL_PROFILE_REQUIRED",
+        "Direct POS receipt printing requires an EdgeSuite Serial receipt profile."
+      );
+    }
+
+    const status = adapter.getStatus?.("serial");
+    if (status?.connected) return status;
+
+    try {
+      const restored = await adapter.devices.connectBoundSerial(
+        profile.name,
+        adapter.profiles.connectionOptions(profile)
+      );
+      if (!restored?.status?.connected) {
+        throw new Error("Printer did not reconnect.");
+      }
+      return restored.status;
+    } catch (error) {
+      throw printError(
+        "PROCESS_EDGE_PRINTER_SETUP_REQUIRED",
+        "Connect this POS device to its receipt printer in Devices & Printing.",
+        error
+      );
+    }
+  }
+
+  function buildEdgeSuiteReceiptDocument(receipt, options, profile) {
+    const sourceBlocks = Array.isArray(receipt?.blocks) ? receipt.blocks : [];
+    const blocks = sourceBlocks
+      .filter((block) => options.printQr || block?.type !== "qr")
+      .map((block) => ({ ...block }));
+
+    if (Number(options.feedLines || 0) > 0) {
+      blocks.push({ type: "feed", lines: Number(options.feedLines) });
+    }
+    if (options.autoCut) {
+      blocks.push({ type: "cut", mode: options.cutMode || "partial" });
+    }
+
+    return {
+      paper: options.paper,
+      charactersPerLine: options.charactersPerLine,
+      blocks,
+      metadata: {
+        ...(receipt?.metadata || {}),
+        product: "retailedge",
+        source: "posnext_extension",
+        profile: profile.name,
+      },
+    };
+  }
+
+  async function printEdgeSuiteInvoice(invoiceName, { automatic = false } = {}) {
+    const name = String(invoiceName || "").trim();
+    if (!name) throw new TypeError("Submitted Sales Invoice name is required.");
+    if (!edgeSuitePrintingEnabled()) {
+      throw printError(
+        "PROCESS_EDGE_PRINTING_DISABLED",
+        STATE.settings?.edgesuite_printing_reason ||
+          "EdgeSuite receipt printing is not enabled for this POS."
+      );
+    }
+    if (automatic && STATE.printing.autoPrintedInvoices.has(name)) {
+      return { printed: false, duplicate: true, name };
+    }
+
+    const adapter = sharedPrintAdapter();
+    if (!adapter) {
+      throw printError(
+        "PROCESS_EDGE_PRINT_RUNTIME_UNAVAILABLE",
+        "The EdgeSuite receipt printer runtime did not load on this POS page."
+      );
+    }
+
+    STATE.printing.busy = true;
+    try {
+      const payload = await callAPI(EDGE_RECEIPT_METHOD, { invoice_name: name });
+      if (!payload?.available) {
+        throw printError(
+          "PROCESS_EDGE_PRINTING_UNAVAILABLE",
+          payload?.reason || "Shared receipt printing is unavailable on this site."
+        );
+      }
+      if (!payload?.profile) {
+        throw printError(
+          "PROCESS_EDGE_PRINTER_PROFILE_REQUIRED",
+          payload?.reason || "No receipt printer profile matches this sale."
+        );
+      }
+      if (!payload?.receipt) {
+        throw printError(
+          "PROCESS_EDGE_RECEIPT_UNAVAILABLE",
+          "RetailEdge did not return a printable submitted receipt."
+        );
+      }
+
+      const profile = adapter.profiles.normalize(payload.profile);
+      await ensureEdgeSuitePrinter(adapter, profile);
+      const options = adapter.profiles.receiptOptions(profile);
+      const documentPayload = buildEdgeSuiteReceiptDocument(
+        payload.receipt,
+        options,
+        profile
+      );
+      const copies = Math.max(1, Number(options.copies || 1));
+      const results = [];
+      for (let copy = 0; copy < copies; copy += 1) {
+        results.push(await adapter.printReceipt(documentPayload));
+      }
+
+      if (automatic) STATE.printing.autoPrintedInvoices.add(name);
+      showPOSAlert(
+        `Receipt ${name} printed${copies > 1 ? ` (${copies} copies)` : ""}.`,
+        "green"
+      );
+      return { printed: true, name, copies, results, profile };
+    } finally {
+      STATE.printing.busy = false;
+    }
+  }
+
+  function submittedInvoiceFromResponse(payload) {
+    const message =
+      payload && Object.prototype.hasOwnProperty.call(payload, "message")
+        ? payload.message
+        : payload;
+    const result = message?.message || message || {};
+    const name = String(result?.name || "").trim();
+    if (!name) return null;
+    return {
+      name,
+      doctype: String(result?.doctype || "Sales Invoice"),
+      company: String(result?.company || ""),
+      branch: String(result?.branch || ""),
+    };
+  }
+
+  async function observeSubmittedInvoiceResponse(url, response) {
+    if (
+      !edgeSuitePrintingEnabled() ||
+      !url?.includes(SUBMIT_INVOICE_ENDPOINT) ||
+      !response?.ok ||
+      typeof response.clone !== "function"
+    ) {
+      return;
+    }
+
+    let payload = null;
+    try {
+      payload = await response.clone().json();
+    } catch (_error) {
+      return;
+    }
+    const invoice = submittedInvoiceFromResponse(payload);
+    if (!invoice || invoice.doctype !== "Sales Invoice") return;
+
+    STATE.printing.lastSubmittedInvoice = invoice;
+    if (edgeSuiteAutoPrintEnabled()) {
+      window.setTimeout(() => {
+        printEdgeSuiteInvoice(invoice.name, { automatic: true }).catch((error) => {
+          console.warn("ProcessEdge POS: EdgeSuite auto-print failed", error);
+          showPOSAlert(
+            "Sale completed, but the EdgeSuite receipt did not print. Use Print Receipt to retry.",
+            "orange"
+          );
+        });
+      }, 0);
+    }
+  }
+
+  function successDialogInvoiceName(dialog) {
+    const remembered = String(STATE.printing.lastSubmittedInvoice?.name || "").trim();
+    if (remembered) return remembered;
+    const text = String(dialog?.textContent || "");
+    const match = text.match(/Invoice\s+([^\s]+)\s+created successfully/i);
+    return match?.[1] || "";
+  }
+
+  function injectEdgeSuiteReceiptAction() {
+    if (!edgeSuitePrintingEnabled()) return;
+
+    const dialogs = Array.from(
+      document.querySelectorAll("[role='dialog'], .dialog-content, .frappe-dialog, .z-dialog-content")
+    ).filter((dialog) => /Invoice\s+.+\s+created successfully/i.test(dialog.textContent || ""));
+
+    dialogs.forEach((dialog) => {
+      if (dialog.querySelector("[data-processedge-edgesuite-print-receipt]")) return;
+      const nativePrint = Array.from(dialog.querySelectorAll("button")).find((button) =>
+        /Print Invoice/i.test(String(button.textContent || ""))
+      );
+      const actions = nativePrint?.parentElement;
+      if (!actions) return;
+
+      const button = document.createElement("button");
+      button.type = "button";
+      button.setAttribute("data-processedge-edgesuite-print-receipt", "1");
+      button.textContent = "Print Receipt";
+      button.className = nativePrint.className || "";
+      button.style.cssText =
+        "min-height:36px;border-radius:8px;padding:8px 14px;font-weight:700;cursor:pointer;";
+      button.addEventListener("click", async () => {
+        const name = successDialogInvoiceName(dialog);
+        if (!name || STATE.printing.busy) return;
+        button.disabled = true;
+        const previous = button.textContent;
+        button.textContent = "Printing...";
+        try {
+          await printEdgeSuiteInvoice(name);
+        } catch (error) {
+          console.warn("ProcessEdge POS: EdgeSuite receipt print failed", error);
+          const setupRequired = [
+            "PROCESS_EDGE_PRINT_RUNTIME_UNAVAILABLE",
+            "PROCESS_EDGE_SERIAL_PROFILE_REQUIRED",
+            "PROCESS_EDGE_PRINTER_SETUP_REQUIRED",
+            "PROCESS_EDGE_PRINTER_PROFILE_REQUIRED",
+          ].includes(error?.code);
+          showPOSAlert(error?.message || "Unable to print receipt.", "orange");
+          if (setupRequired && window.confirm("Open Devices & Printing now?")) {
+            openEdgeSuitePrinterSetup();
+          }
+        } finally {
+          button.disabled = false;
+          button.textContent = previous;
+        }
+      });
+
+      actions.insertBefore(button, nativePrint);
+    });
+  }
 
   async function loadCashierExpenseBridge() {
     try {
