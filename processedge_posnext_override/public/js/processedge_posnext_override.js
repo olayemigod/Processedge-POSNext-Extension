@@ -471,6 +471,105 @@
     });
   }
 
+  function removeEdgeSuitePrinterActions() {
+    document
+      .querySelectorAll("[data-processedge-printer-action]")
+      .forEach((node) => node.remove());
+  }
+
+  function edgeSuitePrinterConnected() {
+    try {
+      return Boolean(sharedPrintAdapter()?.getStatus?.("serial")?.connected);
+    } catch (_error) {
+      return false;
+    }
+  }
+
+  function createPrinterActionButton(mode = "header") {
+    const connected = edgeSuitePrinterConnected();
+    const button = document.createElement("button");
+    button.type = "button";
+    button.setAttribute("data-processedge-printer-action", mode);
+    button.setAttribute("aria-label", connected ? "Receipt Printer Connected" : "Receipt Printer Setup");
+    button.title = connected ? "Receipt Printer — Connected" : "Receipt Printer — Setup";
+    button.style.cssText = [
+      "display:inline-flex",
+      "align-items:center",
+      "justify-content:center",
+      "width:40px",
+      "height:40px",
+      "min-width:40px",
+      "border:1px solid " + (connected ? "#86efac" : "#bfdbfe"),
+      "border-radius:10px",
+      "background:" + (connected ? "#f0fdf4" : "#eff6ff"),
+      "color:" + (connected ? "#15803d" : "#1d4ed8"),
+      "cursor:pointer",
+      "flex-shrink:0",
+    ].join(";");
+    button.innerHTML = [
+      '<svg width="19" height="19" fill="none" stroke="currentColor" viewBox="0 0 24 24">',
+      '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 9V4h12v5M6 18h12v2H6v-2z"></path>',
+      '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 16H4a2 2 0 01-2-2v-3a2 2 0 012-2h16a2 2 0 012 2v3a2 2 0 01-2 2h-2M8 13h8v5H8v-5z"></path>',
+      "</svg>",
+    ].join("");
+    button.addEventListener("click", () => {
+      openEdgeSuitePrinterSetup({
+        company: STATE.settings?.company || "",
+        branch: STATE.settings?.branch || "",
+      });
+    });
+    return button;
+  }
+
+  function injectEdgeSuitePrinterAction() {
+    if (!edgeSuitePrintingEnabled()) {
+      removeEdgeSuitePrinterActions();
+      return;
+    }
+
+    const connected = edgeSuitePrinterConnected();
+    document.querySelectorAll("[data-processedge-printer-action]").forEach((button) => {
+      const isConnectedLabel = button.title === "Receipt Printer — Connected";
+      if (isConnectedLabel !== connected) button.remove();
+    });
+
+    const sidebar = Array.from(document.querySelectorAll("div")).find((node) => {
+      if (!node.classList || !node.classList.contains("w-16")) return false;
+      if (!node.classList.contains("lg:flex")) return false;
+      return node.querySelectorAll("button").length >= 4;
+    });
+
+    if (sidebar && !sidebar.querySelector("[data-processedge-printer-action='sidebar']")) {
+      const button = createPrinterActionButton("sidebar");
+      button.className =
+        "w-12 h-12 rounded-lg flex items-center justify-center transition-all relative group";
+      const settingsButton = Array.from(sidebar.querySelectorAll("button")).find((item) =>
+        String(item.getAttribute("title") || "").toLowerCase().includes("setting")
+      );
+      if (settingsButton) sidebar.insertBefore(button, settingsButton);
+      else sidebar.appendChild(button);
+    }
+
+    const posButton = document.querySelector(
+      "button[title='POS Next'], button[aria-label='POS Next']"
+    );
+    const header = posButton?.closest(".sticky");
+    if (
+      (!sidebar || window.innerWidth < 1024) &&
+      header &&
+      !header.querySelector("[data-processedge-printer-action='header']")
+    ) {
+      const mainRow = Array.from(header.querySelectorAll("div")).find((node) => {
+        const classes = node.classList;
+        return classes && classes.contains("flex-1") && classes.contains("justify-between");
+      });
+      const rightControls = mainRow?.children?.[1];
+      if (rightControls) {
+        rightControls.insertBefore(createPrinterActionButton("header"), rightControls.firstChild || null);
+      }
+    }
+  }
+
   async function loadCashierExpenseBridge() {
     try {
       const bridge = await callAPI(
@@ -1880,6 +1979,7 @@
     injectCashierExpenseAction();
     injectMobilePartialPaymentAction();
     injectEdgeSuiteReceiptAction();
+    injectEdgeSuitePrinterAction();
 
     if (!STATE.settings || !STATE.settings.allow_editing_posting_date) {
       return;
