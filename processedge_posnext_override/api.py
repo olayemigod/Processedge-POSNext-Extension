@@ -1,5 +1,6 @@
 import frappe
 from frappe import _
+from frappe.utils import cint, get_assets_json
 
 from processedge_posnext_override.overrides.pos_settings import (
     ensure_posnext_settings_sync,
@@ -11,6 +12,96 @@ from processedge_posnext_override.overrides.pos_settings import (
     get_effective_customer_phone_requirement,
     posnext_supports_customer_phone_policy,
 )
+
+
+
+EDGESUITE_APP = "edgesuite_ui"
+EDGESUITE_PRINT_ASSET = "edgeui_print.bundle.js"
+EDGESUITE_PROFILE_METHOD = "edgesuite_ui.api.printing.resolve_print_profile"
+RETAILEDGE_RECEIPT_METHOD = "retailedge.thermal_receipt.get_thermal_receipt_payload"
+
+
+def _optional_app_method(app_name, method_path):
+    if app_name not in frappe.get_installed_apps():
+        return None
+    try:
+        return frappe.get_attr(method_path)
+    except (ImportError, AttributeError):
+        return None
+
+
+def _pos_printing_context(settings, pos_profile=None, pos_settings_doc=None):
+    pos_profile = pos_profile or get_current_pos_profile()
+    pos_settings_doc = pos_settings_doc
+    if pos_profile and pos_settings_doc is None:
+        from processedge_posnext_override.overrides.pos_settings import get_pos_settings_doc
+
+        pos_settings_doc = get_pos_settings_doc(pos_profile)
+
+    enabled = cint(settings.get("enable_edgesuite_receipt_printing") or 0)
+    auto_requested = cint(settings.get("auto_print_edgesuite_receipts") or 0)
+
+    native_silent_print = 0
+    if pos_settings_doc is not None and pos_settings_doc.meta.has_field("silent_print"):
+        native_silent_print = cint(pos_settings_doc.get("silent_print") or 0)
+
+    native_auto_print = 0
+    company = ""
+    branch = ""
+    if pos_profile and frappe.db.exists("POS Profile", pos_profile):
+        profile_meta = frappe.get_meta("POS Profile")
+        fields = [
+            fieldname
+            for fieldname in ("print_receipt_on_order_complete", "company", "branch")
+            if profile_meta.has_field(fieldname)
+        ]
+        row = frappe.db.get_value("POS Profile", pos_profile, fields, as_dict=True) if fields else {}
+        row = row or {}
+        native_auto_print = cint(row.get("print_receipt_on_order_complete") or 0)
+        company = str(row.get("company") or "").strip()
+        branch = str(row.get("branch") or "").strip()
+
+    edge_asset_available = False
+    if EDGESUITE_APP in frappe.get_installed_apps():
+        try:
+            edge_asset_available = bool((get_assets_json() or {}).get(EDGESUITE_PRINT_ASSET))
+        except Exception:
+            edge_asset_available = False
+
+    retailedge_available = RETAILEDGE_APP in frappe.get_installed_apps()
+    available = bool(edge_asset_available and retailedge_available)
+    auto_effective = bool(
+        enabled
+        and auto_requested
+        and available
+        and not native_auto_print
+        and not native_silent_print
+    )
+
+    reason = ""
+    if enabled and not available:
+        if not retailedge_available:
+            reason = _("RetailEdge receipt services are not installed on this site.")
+        elif not edge_asset_available:
+            reason = _("The EdgeSuite web print runtime is not built on this site yet.")
+    elif enabled and auto_requested and not auto_effective:
+        if native_auto_print or native_silent_print:
+            reason = _(
+                "POSNext native auto-print is already enabled. EdgeSuite auto-print is paused to "
+                "prevent duplicate receipts."
+            )
+
+    return {
+        "edgesuite_receipt_printing_enabled": enabled,
+        "edgesuite_auto_print_requested": auto_requested,
+        "edgesuite_auto_print_effective": int(auto_effective),
+        "edgesuite_printing_available": int(available),
+        "edgesuite_printing_reason": reason,
+        "posnext_native_auto_print": native_auto_print,
+        "posnext_silent_print": native_silent_print,
+        "company": company,
+        "branch": branch,
+    }
 
 
 @frappe.whitelist()
@@ -39,6 +130,12 @@ def get_pos_override_settings(pos_profile=None):
         native_value = pos_settings_doc.get("require_customer_phone")
         native_phone_policy = int(1 if native_value is None else native_value)
 
+    printing = _pos_printing_context(
+        settings,
+        pos_profile=pos_profile,
+        pos_settings_doc=pos_settings_doc,
+    )
+
     return {
         "allow_editable_selling_price": int(get_effective_rate_editability(pos_profile=pos_profile)),
         "allow_editing_posting_date": int(
@@ -52,6 +149,7 @@ def get_pos_override_settings(pos_profile=None):
         "editable_price_roles": roles,
         "pos_profile": pos_profile,
         "posting_date": frappe.utils.nowdate(),
+        **printing,
     }
 
 
@@ -80,6 +178,62 @@ def _get_retailedge_method(method_path):
         return frappe.get_attr(method_path)
     except (ImportError, AttributeError):
         return None
+
+
+@frappe.whitelist(methods=["GET"])
+def get_edgesuite_receipt_print_payload(invoice_name=None):
+    """Resolve one submitted RetailEdge receipt and its EdgeSuite printer profile.
+
+    RetailEdge remains authoritative for document permissions and receipt business
+    content. EdgeSuite remains authoritative for product availability and printer
+    profile resolution. This extension only bridges those two contracts to /pos.
+    """
+
+    settings = get_app_settings_doc()
+    printing = _pos_printing_context(settings)
+    if not printing["edgesuite_receipt_printing_enabled"]:
+        frappe.throw(_("EdgeSuite receipt printing is disabled in ProcessEdge POSNext Settings."))
+
+    invoice_name = str(invoice_name or "").strip()
+    if not invoice_name:
+        frappe.throw(_("Sales Invoice is required for receipt printing."))
+
+    receipt_method = _optional_app_method(RETAILEDGE_APP, RETAILEDGE_RECEIPT_METHOD)
+    profile_method = _optional_app_method(EDGESUITE_APP, EDGESUITE_PROFILE_METHOD)
+    if not receipt_method or not profile_method:
+        return {
+            "available": 0,
+            "configured": 0,
+            "reason": printing["edgesuite_printing_reason"]
+            or _("Shared EdgeSuite receipt printing is not available on this site."),
+            "printing": printing,
+            "profile": None,
+            "receipt": None,
+        }
+
+    receipt = receipt_method(document="Sales Invoice", name=invoice_name) or {}
+    company = str(receipt.get("company") or printing.get("company") or "").strip()
+    branch = str(receipt.get("branch") or printing.get("branch") or "").strip()
+
+    profile = profile_method(
+        purpose="Receipt",
+        product_key="retailedge",
+        company=company,
+        branch=branch,
+    )
+
+    return {
+        "available": 1,
+        "configured": int(bool(profile)),
+        "reason": "" if profile else _("No active EdgeSuite Receipt printer profile matches this sale."),
+        "printing": {
+            **printing,
+            "company": company,
+            "branch": branch,
+        },
+        "profile": profile,
+        "receipt": receipt,
+    }
 
 
 def _require_retailedge_method(method_path):
