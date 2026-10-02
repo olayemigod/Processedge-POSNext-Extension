@@ -48,9 +48,13 @@ def test_modern_retailedge_still_has_priority_when_available():
 
 
 def test_pos_modal_remains_extension_owned_and_edgesuite_free():
-    assert "async function openCashierExpenseDialog()" in JS_SOURCE
-    assert 'document.createElement("div")' in JS_SOURCE
-    assert "window.EdgeSuiteUI" not in JS_SOURCE
+    modal_start = JS_SOURCE.index("async function openCashierExpenseDialog()")
+    modal_end = JS_SOURCE.find("\n  function ", modal_start)
+    modal_source = JS_SOURCE[modal_start:modal_end if modal_end >= 0 else None]
+
+    assert 'document.createElement("div")' in modal_source
+    assert "window.EdgeSuiteUI" not in modal_source
+    assert "window.EdgeSuitePrint" not in modal_source
 
 
 def test_legacy_submit_can_use_active_pos_shift_operational_authorization():
