@@ -218,3 +218,27 @@ def test_pos_printing_availability_requires_built_edgesuite_web_bundle():
         "available = bool(edge_asset_available and retailedge_available)",
     ):
         assert expected in source
+
+
+def test_success_dialog_is_a_deduplicated_online_auto_print_fallback():
+    source = JS.read_text()
+
+    for expected in (
+        "autoPrintInFlightInvoices: new Set()",
+        "STATE.printing.autoPrintInFlightInvoices.has(name)",
+        "STATE.printing.autoPrintInFlightInvoices.add(name)",
+        "STATE.printing.autoPrintInFlightInvoices.delete(name)",
+        "function isLocalOnlyReceiptName(name)",
+        "/^pos_offline_/i",
+        "function scheduleDialogEdgeSuiteAutoPrint(name)",
+        "scheduleDialogEdgeSuiteAutoPrint(dialogInvoiceName)",
+        'printEdgeSuiteInvoice(invoiceName, { automatic: true })',
+    ):
+        assert expected in source
+
+    dialog_trigger = source.index("scheduleDialogEdgeSuiteAutoPrint(dialogInvoiceName)")
+    button_injection = source.index(
+        'dialog.querySelector("[data-processedge-edgesuite-print-receipt]")',
+        dialog_trigger,
+    )
+    assert dialog_trigger < button_injection
