@@ -206,3 +206,15 @@ def test_pos_printer_setup_action_is_discoverable_on_desktop_and_mobile():
         'params.set("branch", branch)',
     ):
         assert expected in source
+
+
+def test_pos_printing_availability_requires_built_edgesuite_web_bundle():
+    source = API.read_text()
+
+    for expected in (
+        'EDGESUITE_PRINT_ASSET = "edgeui_print.bundle.js"',
+        "get_assets_json()",
+        "edge_asset_available",
+        "available = bool(edge_asset_available and retailedge_available)",
+    ):
+        assert expected in source
