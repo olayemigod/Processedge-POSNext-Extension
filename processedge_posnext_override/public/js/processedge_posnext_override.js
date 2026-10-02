@@ -1138,22 +1138,44 @@
   }
 
   function patchFetch() {
-    if (
-      !window.fetch ||
-      window.fetch.__processedgePosnextPatched ||
-      !STATE.settings ||
-      !STATE.settings.allow_editing_posting_date
-    ) {
+    if (!window.fetch || window.fetch.__processedgePosnextPatched || !STATE.settings) {
+      return;
+    }
+
+    const shouldPatchPostingDate = Boolean(STATE.settings.allow_editing_posting_date);
+    const shouldObservePrinting = Boolean(
+      STATE.settings.edgesuite_receipt_printing_enabled
+    );
+    if (!shouldPatchPostingDate && !shouldObservePrinting) {
       return;
     }
 
     const originalFetch = window.fetch.bind(window);
-    const patched = function (input, init) {
+    const patched = async function (input, init) {
       const url = typeof input === "string" ? input : input && input.url;
-      if (url && isPOSPage() && invoicePatchField(url)) {
-        init = patchRequestPayload(url, init);
+      let nextInit = init;
+
+      if (
+        shouldPatchPostingDate &&
+        url &&
+        isPOSPage() &&
+        invoicePatchField(url)
+      ) {
+        nextInit = patchRequestPayload(url, init);
       }
-      return originalFetch(input, init);
+
+      const response = await originalFetch(input, nextInit);
+      if (
+        shouldObservePrinting &&
+        url &&
+        isPOSPage() &&
+        url.includes(SUBMIT_INVOICE_ENDPOINT)
+      ) {
+        observeSubmittedInvoiceResponse(url, response).catch((error) => {
+          console.warn("ProcessEdge POS: submit print observation failed", error);
+        });
+      }
+      return response;
     };
 
     patched.__processedgePosnextPatched = true;
@@ -1834,6 +1856,7 @@
     unlockRateInputs();
     injectCashierExpenseAction();
     injectMobilePartialPaymentAction();
+    injectEdgeSuiteReceiptAction();
 
     if (!STATE.settings || !STATE.settings.allow_editing_posting_date) {
       return;
