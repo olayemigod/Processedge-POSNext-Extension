@@ -428,15 +428,33 @@
   function injectEdgeSuiteReceiptAction() {
     if (!edgeSuitePrintingEnabled()) return;
 
+    const rememberedName = String(STATE.printing.lastSubmittedInvoice?.name || "").trim();
     const dialogs = Array.from(
       document.querySelectorAll("[role='dialog'], .dialog-content, .frappe-dialog, .z-dialog-content")
-    ).filter((dialog) => /Invoice\s+.+\s+created successfully/i.test(dialog.textContent || ""));
+    ).filter((dialog) => {
+      const text = String(dialog.textContent || "");
+      return rememberedName
+        ? text.includes(rememberedName)
+        : /Invoice\s+.+\s+created successfully/i.test(text);
+    });
 
     dialogs.forEach((dialog) => {
       if (dialog.querySelector("[data-processedge-edgesuite-print-receipt]")) return;
-      const nativePrint = Array.from(dialog.querySelectorAll("button")).find((button) =>
+
+      const dialogButtons = Array.from(dialog.querySelectorAll("button"));
+      let nativePrint = dialogButtons.find((button) =>
         /Print Invoice/i.test(String(button.textContent || ""))
       );
+      if (!nativePrint && rememberedName) {
+        const actionGroups = Array.from(dialog.querySelectorAll("div")).filter(
+          (node) =>
+            node.classList?.contains("flex") &&
+            node.classList?.contains("gap-2") &&
+            node.querySelectorAll("button").length >= 2
+        );
+        nativePrint = Array.from(actionGroups.at(-1)?.querySelectorAll("button") || []).at(-1) || null;
+      }
+
       const actions = nativePrint?.parentElement;
       if (!actions) return;
 
