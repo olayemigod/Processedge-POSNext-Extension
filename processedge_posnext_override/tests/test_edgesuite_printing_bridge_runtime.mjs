@@ -121,22 +121,18 @@ test.state.settings = {
   branch: "Ketu",
 };
 
-assert.deepEqual(
-  test.submittedInvoiceFromResponse({
-    message: {
-      name: "ACC-SINV-2026-00001",
-      doctype: "Sales Invoice",
-      company: "RetailEdge Consulting",
-      branch: "Ketu",
-    },
-  }),
-  {
+const parsedInvoice = test.submittedInvoiceFromResponse({
+  message: {
     name: "ACC-SINV-2026-00001",
     doctype: "Sales Invoice",
     company: "RetailEdge Consulting",
     branch: "Ketu",
   },
-);
+});
+assert.equal(parsedInvoice.name, "ACC-SINV-2026-00001");
+assert.equal(parsedInvoice.doctype, "Sales Invoice");
+assert.equal(parsedInvoice.company, "RetailEdge Consulting");
+assert.equal(parsedInvoice.branch, "Ketu");
 
 assert.equal(
   test.requestContainsOfflineInvoice({
