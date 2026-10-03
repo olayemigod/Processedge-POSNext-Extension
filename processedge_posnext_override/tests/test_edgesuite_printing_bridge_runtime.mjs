@@ -71,7 +71,7 @@ function jsonResponse(message) {
 const windowObject = {
   __PROCESS_EDGE_POSNEXT_TEST_MODE__: true,
   processedgePosnextOverrideInitialized: false,
-  location: { pathname: "/pos", hostname: "retail.local" },
+  location: { pathname: "/pos", hostname: "processedge-test.invalid" },
   EdgeSuitePrint: adapter,
   setTimeout,
   requestAnimationFrame: (fn) => fn(),
@@ -146,6 +146,14 @@ assert.equal(
   test.requestContainsOfflineInvoice({
     body: new URLSearchParams({
       invoice: JSON.stringify({ customer: "Walk In" }),
+    }),
+  }),
+  false,
+);
+assert.equal(
+  test.requestContainsOfflineInvoice({
+    body: new URLSearchParams({
+      invoice: JSON.stringify({ offline_id: "", customer: "Walk In" }),
     }),
   }),
   false,
