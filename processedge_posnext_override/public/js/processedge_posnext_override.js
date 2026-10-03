@@ -331,8 +331,9 @@
       );
       const copies = Math.max(1, Number(options.copies || 1));
       const results = [];
+      const encodeText = adapter.profiles.textEncoder(profile);
       for (let copy = 0; copy < copies; copy += 1) {
-        results.push(await adapter.printReceipt(documentPayload));
+        results.push(await adapter.printReceipt(documentPayload, { encodeText }));
       }
 
       if (automatic) STATE.printing.autoPrintedInvoices.add(name);
