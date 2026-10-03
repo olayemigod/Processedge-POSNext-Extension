@@ -184,6 +184,7 @@ def test_offline_printing_remains_posnext_owned():
     source = JS.read_text()
 
     assert "requestContainsOfflineInvoice" in source
+    assert "structuredValueContainsOfflineId" in source
     assert "offline_id" in source
     assert "cacheOfflineReceiptPayload" not in source
     assert "Offline Invoice Sync" not in source
@@ -271,6 +272,7 @@ def test_runtime_test_seam_is_explicit_and_does_not_run_in_normal_pos():
     source = JS.read_text()
 
     assert "window.__PROCESS_EDGE_POSNEXT_TEST_MODE__" in source
+    assert 'window.location.hostname === "processedge-test.invalid"' in source
     assert "window.__ProcessEdgePOSNextPrintingTest" in source
     assert source.index("window.__PROCESS_EDGE_POSNEXT_TEST_MODE__") < source.index(
         'if (document.readyState === "loading")'
