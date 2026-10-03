@@ -51,6 +51,7 @@ def test_server_bridge_delegates_business_and_profile_authority():
     for expected in (
         'EDGESUITE_PROFILE_METHOD = "edgesuite_ui.api.printing.resolve_print_profile"',
         'RETAILEDGE_RECEIPT_METHOD = "retailedge.thermal_receipt.get_thermal_receipt_payload"',
+        'RETAILEDGE_POS_BRANCH_METHOD = "retailedge.branch_context.resolve_branch_from_pos_profile"',
         "def get_edgesuite_receipt_print_payload",
         'receipt_method(document="Sales Invoice", name=invoice_name)',
         'product_key="retailedge"',
@@ -277,3 +278,20 @@ def test_runtime_test_seam_is_explicit_and_does_not_run_in_normal_pos():
     assert source.index("window.__PROCESS_EDGE_POSNEXT_TEST_MODE__") < source.index(
         'if (document.readyState === "loading")'
     )
+
+
+
+def test_pos_printing_context_uses_retailedge_branch_governance():
+    source = API.read_text()
+    context = source.split("def _pos_printing_context", 1)[1].split(
+        "@frappe.whitelist()", 1
+    )[0]
+
+    for expected in (
+        "RETAILEDGE_POS_BRANCH_METHOD",
+        "_optional_app_method(RETAILEDGE_APP, RETAILEDGE_POS_BRANCH_METHOD)",
+        "branch_resolver(pos_profile, company=company)",
+        'company = str(resolved.get("company") or company or "").strip()',
+        'branch = str(resolved.get("branch") or branch or "").strip()',
+    ):
+        assert expected in context
