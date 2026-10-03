@@ -19,6 +19,7 @@ EDGESUITE_APP = "edgesuite_ui"
 EDGESUITE_PRINT_ASSET = "edgeui_print.bundle.js"
 EDGESUITE_PROFILE_METHOD = "edgesuite_ui.api.printing.resolve_print_profile"
 RETAILEDGE_RECEIPT_METHOD = "retailedge.thermal_receipt.get_thermal_receipt_payload"
+RETAILEDGE_POS_BRANCH_METHOD = "retailedge.branch_context.resolve_branch_from_pos_profile"
 
 
 def _optional_app_method(app_name, method_path):
@@ -60,6 +61,16 @@ def _pos_printing_context(settings, pos_profile=None, pos_settings_doc=None):
         native_auto_print = cint(row.get("print_receipt_on_order_complete") or 0)
         company = str(row.get("company") or "").strip()
         branch = str(row.get("branch") or "").strip()
+
+    if pos_profile and RETAILEDGE_APP in frappe.get_installed_apps():
+        branch_resolver = _optional_app_method(RETAILEDGE_APP, RETAILEDGE_POS_BRANCH_METHOD)
+        if branch_resolver:
+            try:
+                resolved = branch_resolver(pos_profile, company=company) or {}
+            except Exception:
+                resolved = {}
+            company = str(resolved.get("company") or company or "").strip()
+            branch = str(resolved.get("branch") or branch or "").strip()
 
     edge_asset_available = False
     if EDGESUITE_APP in frappe.get_installed_apps():
