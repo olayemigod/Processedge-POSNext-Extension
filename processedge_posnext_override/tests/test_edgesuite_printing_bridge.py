@@ -122,7 +122,8 @@ def test_pos_receipt_printing_uses_only_shared_edgesuite_transport():
         "adapter.devices.connectBoundSerial",
         "adapter.profiles.connectionOptions(profile)",
         "adapter.profiles.receiptOptions(profile)",
-        "adapter.printReceipt(documentPayload)",
+        "adapter.profiles.textEncoder(profile)",
+        "adapter.printReceipt(documentPayload, { encodeText })",
         'data-processedge-edgesuite-print-receipt',
         'button.textContent = "Print Receipt"',
         "openEdgeSuitePrinterSetup",
@@ -242,3 +243,35 @@ def test_success_dialog_is_a_deduplicated_online_auto_print_fallback():
         dialog_trigger,
     )
     assert dialog_trigger < button_injection
+
+
+
+def test_duplicate_settings_sources_remain_identical():
+    outer_json = (
+        APP
+        / "doctype"
+        / "processedge_posnext_settings"
+        / "processedge_posnext_settings.json"
+    )
+    module_json = (
+        APP
+        / "processedge_posnext_override"
+        / "doctype"
+        / "processedge_posnext_settings"
+        / "processedge_posnext_settings.json"
+    )
+    outer_py = outer_json.with_suffix(".py")
+    module_py = module_json.with_suffix(".py")
+
+    assert json.loads(outer_json.read_text()) == json.loads(module_json.read_text())
+    assert outer_py.read_text() == module_py.read_text()
+
+
+def test_runtime_test_seam_is_explicit_and_does_not_run_in_normal_pos():
+    source = JS.read_text()
+
+    assert "window.__PROCESS_EDGE_POSNEXT_TEST_MODE__" in source
+    assert "window.__ProcessEdgePOSNextPrintingTest" in source
+    assert source.index("window.__PROCESS_EDGE_POSNEXT_TEST_MODE__") < source.index(
+        'if (document.readyState === "loading")'
+    )
