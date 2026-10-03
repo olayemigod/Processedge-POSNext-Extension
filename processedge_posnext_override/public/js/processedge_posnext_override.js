@@ -2172,6 +2172,20 @@
     startObserver();
   }
 
+  if (window.__PROCESS_EDGE_POSNEXT_TEST_MODE__) {
+    window.__ProcessEdgePOSNextPrintingTest = Object.freeze({
+      state: STATE,
+      submittedInvoiceFromResponse,
+      requestContainsOfflineInvoice,
+      printEdgeSuiteInvoice,
+      observeSubmittedInvoiceResponse,
+      scheduleDialogEdgeSuiteAutoPrint,
+      edgeSuitePrinterSetupUrl,
+      isLocalOnlyReceiptName,
+    });
+    return;
+  }
+
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", boot);
   } else {
