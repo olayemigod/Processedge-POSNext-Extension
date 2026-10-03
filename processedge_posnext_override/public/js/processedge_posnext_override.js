@@ -370,26 +370,70 @@
     };
   }
 
+  function structuredValueContainsOfflineId(value) {
+    if (!value) return false;
+    if (typeof value === "object") {
+      if (
+        Object.prototype.hasOwnProperty.call(value, "offline_id") &&
+        String(value.offline_id || "").trim()
+      ) {
+        return true;
+      }
+      return Object.values(value).some((entry) =>
+        structuredValueContainsOfflineId(entry)
+      );
+    }
+    if (typeof value !== "string") return false;
+
+    const text = value.trim();
+    if (!text) return false;
+    if (text.startsWith("{") || text.startsWith("[")) {
+      try {
+        return structuredValueContainsOfflineId(JSON.parse(text));
+      } catch (_error) {
+        return false;
+      }
+    }
+    return false;
+  }
+
   function requestContainsOfflineInvoice(init) {
     const body = init?.body;
     if (!body) return false;
 
-    const hasOfflineId = (value) =>
-      typeof value === "string" && value.toLowerCase().includes("offline_id");
-
     if (typeof URLSearchParams !== "undefined" && body instanceof URLSearchParams) {
-      if (body.get("offline_id")) return true;
-      return Array.from(body.values()).some((value) => hasOfflineId(String(value)));
+      if (String(body.get("offline_id") || "").trim()) return true;
+      return Array.from(body.values()).some((value) =>
+        structuredValueContainsOfflineId(value)
+      );
     }
     if (typeof FormData !== "undefined" && body instanceof FormData) {
-      if (body.get("offline_id")) return true;
+      if (String(body.get("offline_id") || "").trim()) return true;
       let found = false;
       body.forEach((value) => {
-        if (!found && hasOfflineId(String(value))) found = true;
+        if (!found && structuredValueContainsOfflineId(value)) found = true;
       });
       return found;
     }
-    return hasOfflineId(String(body));
+    if (typeof body === "string") {
+      const text = body.trim();
+      if (!text) return false;
+      try {
+        const params = new URLSearchParams(text);
+        if (String(params.get("offline_id") || "").trim()) return true;
+        if (
+          Array.from(params.values()).some((value) =>
+            structuredValueContainsOfflineId(value)
+          )
+        ) {
+          return true;
+        }
+      } catch (_error) {
+        // Fall through to raw JSON parsing.
+      }
+      return structuredValueContainsOfflineId(text);
+    }
+    return structuredValueContainsOfflineId(body);
   }
 
   async function observeSubmittedInvoiceResponse(url, response) {
@@ -2172,7 +2216,10 @@
     startObserver();
   }
 
-  if (window.__PROCESS_EDGE_POSNEXT_TEST_MODE__) {
+  if (
+    window.__PROCESS_EDGE_POSNEXT_TEST_MODE__ &&
+    window.location.hostname === "processedge-test.invalid"
+  ) {
     window.__ProcessEdgePOSNextPrintingTest = Object.freeze({
       state: STATE,
       submittedInvoiceFromResponse,
