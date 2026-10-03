@@ -8,6 +8,9 @@
   "feature_section",
   "allow_editable_selling_price",
   "allow_editing_posting_date",
+  "printing_section",
+  "enable_edgesuite_receipt_printing",
+  "auto_print_edgesuite_receipts",
   "customer_creation_section",
   "require_customer_phone",
   "permission_section",
@@ -34,6 +37,26 @@
    "fieldname": "allow_editing_posting_date",
    "fieldtype": "Check",
    "label": "Allow Editing Posting Date on POS"
+  },
+  {
+   "fieldname": "printing_section",
+   "fieldtype": "Section Break",
+   "label": "Receipt Printing"
+  },
+  {
+   "default": "0",
+   "description": "Use the shared EdgeSuite receipt-printer runtime on the POS page. This adds a direct Bluetooth/serial receipt option without replacing POSNext browser or QZ Tray printing.",
+   "fieldname": "enable_edgesuite_receipt_printing",
+   "fieldtype": "Check",
+   "label": "Enable EdgeSuite Receipt Printing"
+  },
+  {
+   "default": "0",
+   "depends_on": "enable_edgesuite_receipt_printing",
+   "description": "Automatically print a submitted online sale through EdgeSuite when POSNext native auto-print and silent-print are both disabled. Offline receipts continue to use POSNext's existing local print flow.",
+   "fieldname": "auto_print_edgesuite_receipts",
+   "fieldtype": "Check",
+   "label": "Auto-print with EdgeSuite"
   },
   {
    "fieldname": "customer_creation_section",
