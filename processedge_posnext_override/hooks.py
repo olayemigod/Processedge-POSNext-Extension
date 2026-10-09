@@ -4,7 +4,7 @@ app_publisher = "ProcessEdge Solutions"
 app_description = "POSNext overrides for editable price and posting date control"
 app_email = "processedgeng@gmail.com"
 app_license = "MIT"
-app_home = "/pos"
+app_home = "/desk/posnext"
 app_logo_url = "/assets/processedge_posnext_override/images/pos-next-app-icon.svg"
 
 add_to_apps_screen = [
