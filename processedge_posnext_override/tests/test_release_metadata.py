@@ -116,13 +116,17 @@ def test_pos_runtime_requests_are_isolated_and_vite_compatible():
     assert '"pos_next.api.invoices.update_invoice", "data"' in js
     assert '"pos_next.api.invoices.submit_invoice", "invoice"' in js
     assert '"pos_next.api.invoices.apply_offers", "invoice_data"' in js
-    assert "if (url && isPOSPage() && invoicePatchField(url))" in js
-    assert "!STATE.settings.allow_editing_posting_date" in js
+    assert "const shouldPatchPostingDate = Boolean(STATE.settings.allow_editing_posting_date)" in js
+    assert "invoicePatchField(url)" in js
+    assert "nextInit = patchRequestPayload(url, init)" in js
 
-    # Normal POSNext API requests must remain byte-for-byte untouched. The request
-    # wrapper may only transform the three invoice endpoints above.
+    # Normal POSNext API requests remain byte-for-byte untouched. Only the three
+    # invoice endpoints above may have posting-date request data transformed.
+    # The EdgeSuite submit observer reads response.clone() and does not mutate
+    # POSNext's response or request payload.
     assert "function parseBody(body)" not in js
-    assert "patchRequestPayload(url, init)" in js
+    assert "observeSubmittedInvoiceResponse(url, response)" in js
+    assert "response.clone().json()" in js
 
 
 def test_pos_ui_and_posting_date_governance_contract():
