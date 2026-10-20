@@ -8,6 +8,7 @@ const source = await readFile(
 );
 
 let printCount = 0;
+let authMode = "success";
 const printedDocuments = [];
 const adapter = {
   getStatus() {
@@ -62,8 +63,28 @@ function jsonResponse(message) {
     async json() {
       return { message };
     },
+    async text() {
+      return JSON.stringify({ message });
+    },
     clone() {
       return jsonResponse(message);
+    },
+  };
+}
+
+function errorResponse(status, payload) {
+  return {
+    ok: false,
+    status,
+    headers: { get: () => "application/json" },
+    async json() {
+      return payload;
+    },
+    async text() {
+      return JSON.stringify(payload);
+    },
+    clone() {
+      return errorResponse(status, payload);
     },
   };
 }
@@ -71,7 +92,11 @@ function jsonResponse(message) {
 const windowObject = {
   __PROCESS_EDGE_POSNEXT_TEST_MODE__: true,
   processedgePosnextOverrideInitialized: false,
-  location: { pathname: "/pos", hostname: "processedge-test.invalid" },
+  location: {
+    pathname: "/pos",
+    hostname: "processedge-test.invalid",
+    origin: "https://processedge-test.invalid",
+  },
   EdgeSuitePrint: adapter,
   setTimeout,
   requestAnimationFrame: (fn) => fn(),
@@ -79,7 +104,26 @@ const windowObject = {
   confirm: () => false,
 };
 windowObject.fetch = async (url) => {
-  if (String(url).includes("get_edgesuite_receipt_print_payload")) {
+  const text = String(url);
+  if (text.includes("frappe.auth.get_logged_user")) {
+    if (authMode === "network-error") {
+      throw new TypeError("simulated startup network failure");
+    }
+    if (authMode === "permission-error") {
+      return errorResponse(403, {
+        exc_type: "PermissionError",
+        exception: "frappe.exceptions.PermissionError",
+      });
+    }
+    if (authMode === "authentication-error") {
+      return errorResponse(401, {
+        exc_type: "AuthenticationError",
+        exception: "frappe.exceptions.AuthenticationError",
+      });
+    }
+    return jsonResponse("browser-cashier@example.com");
+  }
+  if (text.includes("get_edgesuite_receipt_print_payload")) {
     return jsonResponse({
       available: 1,
       configured: 1,
@@ -99,13 +143,19 @@ windowObject.fetch = async (url) => {
   throw new Error(`Unexpected fetch URL: ${url}`);
 };
 
+const documentObject = {
+  cookie:
+    "user_lang=en; system_user=yes; full_name=Browser%20Cashier; user_id=browser-cashier%40example.com",
+};
+
 const context = vm.createContext({
   window: windowObject,
-  document: {},
+  document: documentObject,
   console,
   URLSearchParams,
   FormData: globalThis.FormData,
   TextEncoder,
+  Response: globalThis.Response,
   setTimeout,
   clearTimeout,
 });
@@ -113,6 +163,31 @@ vm.runInContext(source, context, { filename: "processedge_posnext_override.js" }
 
 const test = windowObject.__ProcessEdgePOSNextPrintingTest;
 assert.ok(test, "test seam should be exposed in explicit test mode");
+
+// POSNext v1.17.0 treats any startup user-resource failure as logged out. The
+// ProcessEdge compatibility bridge must mirror current upstream behavior:
+// preserve real authentication failures, but trust the existing Frappe session
+// cookie when a non-auth startup failure prevents the user-resource read.
+authMode = "success";
+let authResponse = await windowObject.fetch("/api/method/frappe.auth.get_logged_user");
+assert.equal(authResponse.status, 200);
+assert.equal((await authResponse.json()).message, "browser-cashier@example.com");
+
+authMode = "network-error";
+authResponse = await windowObject.fetch("/api/method/frappe.auth.get_logged_user");
+assert.equal(authResponse.status, 200);
+assert.equal((await authResponse.json()).message, "browser-cashier@example.com");
+
+authMode = "permission-error";
+authResponse = await windowObject.fetch("/api/method/frappe.auth.get_logged_user");
+assert.equal(authResponse.status, 200);
+assert.equal((await authResponse.json()).message, "browser-cashier@example.com");
+
+authMode = "authentication-error";
+authResponse = await windowObject.fetch("/api/method/frappe.auth.get_logged_user");
+assert.equal(authResponse.status, 401, "real authentication failures must never be masked");
+
+authMode = "success";
 test.state.settings = {
   edgesuite_receipt_printing_enabled: 1,
   edgesuite_printing_available: 1,
@@ -199,4 +274,4 @@ assert.match(setupUrl, /product_key=retailedge/);
 assert.match(setupUrl, /company=RetailEdge\+Consulting/);
 assert.match(setupUrl, /branch=Ketu/);
 
-console.log("Executable POS EdgeSuite printing bridge runtime checks passed.");
+console.log("Executable POS EdgeSuite printing and session compatibility checks passed.");
