@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+POS_SESSION_COMPAT_SCRIPT = "/assets/processedge_posnext_override/js/processedge_pos_session_compat.js"
 POS_PAGE_SCRIPT = "/assets/processedge_posnext_override/js/processedge_posnext_override.js"
 EDGE_SUITE_PRINT_ASSET = "edgeui_print.bundle.js"
 
@@ -35,15 +36,17 @@ def _script_tag(source: str) -> str:
 
 
 def inject_pos_page_script(response=None, request=None):
-    """Inject ProcessEdge's POS bridge and optional EdgeSuite print runtime.
+    """Inject ProcessEdge POS compatibility, printing runtime and bridge assets.
 
     POSNext serves /pos from a generated Vite HTML entry instead of Frappe's
     standard website base template, so web_include_js can be present in
     assets_json without being emitted as a script tag on that page.
 
-    When EdgeSuite UI is installed and its lightweight print bundle has been
-    built, inject it before the ProcessEdge bridge. Other website routes are
-    untouched and sites without EdgeSuite keep the existing POS behavior.
+    The session-compatibility script is a classic synchronous script. It must be
+    emitted before the deferred POSNext module gets a chance to initialize so
+    authenticated Frappe sessions survive non-auth startup read failures on the
+    pinned POSNext runtime. EdgeSuite's print runtime and the main ProcessEdge
+    POS bridge follow it. Other website routes are untouched.
     """
 
     if response is None or request is None:
@@ -71,6 +74,9 @@ def inject_pos_page_script(response=None, request=None):
         return
 
     sources: list[str] = []
+    if POS_SESSION_COMPAT_SCRIPT not in html:
+        sources.append(POS_SESSION_COMPAT_SCRIPT)
+
     edge_print_script = _resolve_edge_suite_print_script()
     if edge_print_script and edge_print_script not in html:
         sources.append(edge_print_script)
