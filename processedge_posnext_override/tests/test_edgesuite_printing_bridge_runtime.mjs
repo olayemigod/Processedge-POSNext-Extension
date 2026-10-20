@@ -2,6 +2,10 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import vm from "node:vm";
 
+const compatSource = await readFile(
+  new URL("../public/js/processedge_pos_session_compat.js", import.meta.url),
+  "utf8",
+);
 const source = await readFile(
   new URL("../public/js/processedge_posnext_override.js", import.meta.url),
   "utf8",
@@ -152,6 +156,7 @@ const context = vm.createContext({
   window: windowObject,
   document: documentObject,
   console,
+  URL,
   URLSearchParams,
   FormData: globalThis.FormData,
   TextEncoder,
@@ -159,15 +164,15 @@ const context = vm.createContext({
   setTimeout,
   clearTimeout,
 });
+vm.runInContext(compatSource, context, { filename: "processedge_pos_session_compat.js" });
 vm.runInContext(source, context, { filename: "processedge_posnext_override.js" });
 
 const test = windowObject.__ProcessEdgePOSNextPrintingTest;
 assert.ok(test, "test seam should be exposed in explicit test mode");
 
 // POSNext v1.17.0 treats any startup user-resource failure as logged out. The
-// ProcessEdge compatibility bridge must mirror current upstream behavior:
-// preserve real authentication failures, but trust the existing Frappe session
-// cookie when a non-auth startup failure prevents the user-resource read.
+// ProcessEdge compatibility bridge mirrors current upstream behavior while
+// preserving genuine AuthenticationError responses.
 authMode = "success";
 let authResponse = await windowObject.fetch("/api/method/frappe.auth.get_logged_user");
 assert.equal(authResponse.status, 200);
