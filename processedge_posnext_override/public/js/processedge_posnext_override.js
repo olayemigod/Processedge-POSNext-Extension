@@ -270,7 +270,15 @@
   }
 
   function buildEdgeSuiteReceiptDocument(receipt, options, profile) {
-    const sourceBlocks = Array.isArray(receipt?.blocks) ? receipt.blocks : [];
+    // RetailEdge supplies preformatted 58mm and 80mm layouts. The default
+    // receipt.blocks is the 80mm variant and must not be sent to a 58mm printer.
+    const paperWidth = String(Number(options.paper || 80));
+    const paperBlocks = receipt?.blocks_by_paper?.[paperWidth];
+    const sourceBlocks = Array.isArray(paperBlocks)
+      ? paperBlocks
+      : Array.isArray(receipt?.blocks)
+        ? receipt.blocks
+        : [];
     const blocks = sourceBlocks
       .filter((block) => options.printQr || block?.type !== "qr")
       .map((block) => ({ ...block }));
@@ -291,6 +299,8 @@
         product: "retailedge",
         source: "posnext_extension",
         profile: profile.name,
+        template: receipt?.template_variants?.[paperWidth] || receipt?.template_family || "",
+        paper_width: options.paper,
       },
     };
   }
