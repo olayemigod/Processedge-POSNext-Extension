@@ -14,13 +14,32 @@ const source = await readFile(
 let printCount = 0;
 let authMode = "success";
 const printedDocuments = [];
+let connectedProfile = "Default Receipt";
+let disconnectCount = 0;
+let boundConnectCount = 0;
+let forceRestoredBindingMismatch = false;
 const adapter = {
   getStatus() {
-    return { connected: true, state: "connected" };
+    return { connected: Boolean(connectedProfile), state: connectedProfile ? "connected" : "disconnected" };
+  },
+  async disconnect(transport) {
+    assert.equal(transport, "serial");
+    disconnectCount += 1;
+    connectedProfile = null;
+    return this.getStatus();
   },
   devices: {
-    async connectBoundSerial() {
-      return { status: { connected: true, state: "connected" } };
+    bindingMatchesStatus(profileName, status) {
+      return Boolean(
+        status.connected
+        && profileName === connectedProfile
+        && !forceRestoredBindingMismatch
+      );
+    },
+    async connectBoundSerial(profileName) {
+      boundConnectCount += 1;
+      connectedProfile = profileName;
+      return { status: adapter.getStatus() };
     },
   },
   profiles: {
@@ -278,5 +297,25 @@ assert.match(setupUrl, /purpose=Receipt/);
 assert.match(setupUrl, /product_key=retailedge/);
 assert.match(setupUrl, /company=RetailEdge\+Consulting/);
 assert.match(setupUrl, /branch=Ketu/);
+
+// A connected serial port must never be assumed to be the printer bound
+// to the selected profile. Switch to the saved correct port before printing.
+connectedProfile = "Other Branch Receipt";
+const beforeSwitchPrints = printCount;
+await test.printEdgeSuiteInvoice("ACC-SINV-2026-00004");
+assert.equal(disconnectCount, 1, "wrong connected port must be disconnected");
+assert.equal(boundConnectCount, 1, "the requested profile must be restored");
+assert.equal(printCount, beforeSwitchPrints + 1, "receipt prints after correct binding is restored");
+
+// Even when restoration reports a connected port, a mismatched binding must
+// fail closed instead of sending a different merchant's receipt to that port.
+connectedProfile = "Other Branch Receipt";
+forceRestoredBindingMismatch = true;
+await assert.rejects(
+  test.printEdgeSuiteInvoice("ACC-SINV-2026-00005"),
+  (error) => error?.code === "PROCESS_EDGE_PRINTER_SETUP_REQUIRED",
+);
+assert.equal(printCount, beforeSwitchPrints + 1, "no receipt sent to an unmatched port");
+forceRestoredBindingMismatch = false;
 
 console.log("Executable POS EdgeSuite printing and session compatibility checks passed.");
