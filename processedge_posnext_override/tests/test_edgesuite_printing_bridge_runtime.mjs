@@ -159,7 +159,12 @@ windowObject.fetch = async (url) => {
       receipt: {
         company: "RetailEdge Consulting",
         branch: "Ketu",
-        blocks: [{ type: "text", text: "Receipt" }],
+        // A 58mm printer must not receive the default 80mm preformatted rows.
+        blocks: [{ type: "text", text: "80mm default receipt" }],
+        blocks_by_paper: {
+          "58": [{ type: "text", text: "58mm receipt" }],
+          "80": [{ type: "text", text: "80mm receipt" }],
+        },
       },
     });
   }
@@ -268,6 +273,11 @@ assert.equal(first.printed, true);
 assert.equal(duplicate.duplicate, true);
 assert.equal(printCount, 1, "in-flight automatic requests must print exactly once");
 assert.equal(printedDocuments[0].document.paper, 58);
+assert.equal(
+  printedDocuments[0].document.blocks[0].text,
+  "58mm receipt",
+  "receipt layout must use the server's profile-specific 58mm block variant",
+);
 assert.equal(typeof printedDocuments[0].options.encodeText, "function");
 
 const response = jsonResponse({
