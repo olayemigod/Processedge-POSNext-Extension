@@ -215,32 +215,55 @@
     if (!adapter?.devices || !adapter?.profiles || typeof adapter.printReceipt !== "function") {
       throw printError(
         "PROCESS_EDGE_PRINT_RUNTIME_UNAVAILABLE",
-        "The EdgeSuite receipt printer runtime is not available on this POS page."
+        "The shared receipt printer is not available on this POS page."
       );
     }
     if (!profile || profile.transport !== "serial") {
       throw printError(
         "PROCESS_EDGE_SERIAL_PROFILE_REQUIRED",
-        "Direct POS receipt printing requires an EdgeSuite Serial receipt profile."
+        "Direct receipt printing requires a configured serial receipt printer."
       );
     }
 
+    // The serial connection is shared across receipt profiles. A connected
+    // port may belong to another terminal/branch printer; never print to it
+    // solely because its connection state is "connected".
     const status = adapter.getStatus?.("serial");
-    if (status?.connected) return status;
+    if (
+      status?.connected &&
+      adapter.devices.bindingMatchesStatus?.(profile.name, status)
+    ) {
+      return status;
+    }
 
     try {
+      if (status?.connected) {
+        if (typeof adapter.disconnect !== "function") {
+          throw new Error("The existing printer connection cannot be switched safely.");
+        }
+        await adapter.disconnect("serial");
+      }
+
       const restored = await adapter.devices.connectBoundSerial(
         profile.name,
         adapter.profiles.connectionOptions(profile)
       );
-      if (!restored?.status?.connected) {
-        throw new Error("Printer did not reconnect.");
+      // Fail closed if the shared runtime cannot prove which saved printer
+      // was restored. Never dispatch a customer's receipt to a different port.
+      if (
+        !restored?.status?.connected ||
+        !adapter.devices.bindingMatchesStatus?.(profile.name, restored.status)
+      ) {
+        if (restored?.status?.connected && typeof adapter.disconnect === "function") {
+          await adapter.disconnect("serial");
+        }
+        throw new Error("The connected printer does not match this receipt profile.");
       }
       return restored.status;
     } catch (error) {
       throw printError(
         "PROCESS_EDGE_PRINTER_SETUP_REQUIRED",
-        "Connect this POS device to its receipt printer in Devices & Printing.",
+        "Connect this device to the correct receipt printer in Devices & Printing.",
         error
       );
     }
