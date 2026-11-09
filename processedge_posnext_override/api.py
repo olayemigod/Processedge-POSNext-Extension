@@ -92,13 +92,13 @@ def _pos_printing_context(settings, pos_profile=None, pos_settings_doc=None):
     reason = ""
     if enabled and not available:
         if not retailedge_available:
-            reason = _("RetailEdge receipt services are not installed on this site.")
+            reason = _("Receipt printing services are not available on this site.")
         elif not edge_asset_available:
-            reason = _("The EdgeSuite web print runtime is not built on this site yet.")
+            reason = _("The direct receipt printing service is not available on this site.")
     elif enabled and auto_requested and not auto_effective:
         if native_auto_print or native_silent_print:
             reason = _(
-                "POSNext native auto-print is already enabled. EdgeSuite auto-print is paused to "
+                "Another automatic printing method is enabled. Connected-printer auto-print is paused to "
                 "prevent duplicate receipts."
             )
 
@@ -203,7 +203,7 @@ def get_edgesuite_receipt_print_payload(invoice_name=None):
     settings = get_app_settings_doc()
     printing = _pos_printing_context(settings)
     if not printing["edgesuite_receipt_printing_enabled"]:
-        frappe.throw(_("EdgeSuite receipt printing is disabled in ProcessEdge POSNext Settings."))
+        frappe.throw(_("Direct receipt printing is disabled in POS settings."))
 
     invoice_name = str(invoice_name or "").strip()
     if not invoice_name:
@@ -216,7 +216,7 @@ def get_edgesuite_receipt_print_payload(invoice_name=None):
             "available": 0,
             "configured": 0,
             "reason": printing["edgesuite_printing_reason"]
-            or _("Shared EdgeSuite receipt printing is not available on this site."),
+            or _("Direct receipt printing is not available on this site."),
             "printing": printing,
             "profile": None,
             "receipt": None,
@@ -236,7 +236,7 @@ def get_edgesuite_receipt_print_payload(invoice_name=None):
     return {
         "available": 1,
         "configured": int(bool(profile)),
-        "reason": "" if profile else _("No active EdgeSuite Receipt printer profile matches this sale."),
+        "reason": "" if profile else _("No active receipt printer is configured for this sale."),
         "printing": {
             **printing,
             "company": company,

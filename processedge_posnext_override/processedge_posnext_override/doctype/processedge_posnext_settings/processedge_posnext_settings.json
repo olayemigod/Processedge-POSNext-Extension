@@ -45,18 +45,18 @@
   },
   {
    "default": "0",
-   "description": "Use the shared EdgeSuite receipt-printer runtime on the POS page. This adds a direct Bluetooth/serial receipt option without replacing POSNext browser or QZ Tray printing.",
+   "description": "Use the printer connected in Devices & Printing. Your existing browser and system printing options remain available.",
    "fieldname": "enable_edgesuite_receipt_printing",
    "fieldtype": "Check",
-   "label": "Enable EdgeSuite Receipt Printing"
+   "label": "Enable Direct Receipt Printing"
   },
   {
    "default": "0",
    "depends_on": "enable_edgesuite_receipt_printing",
-   "description": "Automatically print a submitted online sale through EdgeSuite when POSNext native auto-print and silent-print are both disabled. Offline receipts continue to use POSNext's existing local print flow.",
+   "description": "Print receipts automatically after successful online sales when other automatic printing methods are disabled. Offline sales continue using their existing printing method.",
    "fieldname": "auto_print_edgesuite_receipts",
    "fieldtype": "Check",
-   "label": "Auto-print with EdgeSuite"
+   "label": "Automatically Print Direct Receipts"
   },
   {
    "fieldname": "customer_creation_section",

@@ -198,7 +198,7 @@
     const url = edgeSuitePrinterSetupUrl(context);
     const opened = window.open(url, "_blank", "noopener,noreferrer");
     if (!opened) {
-      showPOSAlert("Open Devices & Printing from RetailEdge Business Setup.", "orange");
+      showPOSAlert("Open Devices & Printing in Business Setup.", "orange");
       return false;
     }
     return true;
@@ -312,7 +312,7 @@
       throw printError(
         "PROCESS_EDGE_PRINTING_DISABLED",
         STATE.settings?.edgesuite_printing_reason ||
-          "EdgeSuite receipt printing is not enabled for this POS."
+          "Direct receipt printing is not enabled for this register."
       );
     }
     if (
@@ -327,7 +327,7 @@
     if (!adapter) {
       throw printError(
         "PROCESS_EDGE_PRINT_RUNTIME_UNAVAILABLE",
-        "The EdgeSuite receipt printer runtime did not load on this POS page."
+        "The receipt printer connection is unavailable. Refresh this page and try again."
       );
     }
 
@@ -350,7 +350,7 @@
       if (!payload?.receipt) {
         throw printError(
           "PROCESS_EDGE_RECEIPT_UNAVAILABLE",
-          "RetailEdge did not return a printable submitted receipt."
+          "The receipt could not be prepared. Check the invoice and try again."
         );
       }
 
@@ -494,7 +494,7 @@
         printEdgeSuiteInvoice(invoice.name, { automatic: true }).catch((error) => {
           console.warn("ProcessEdge POS: EdgeSuite auto-print failed", error);
           showPOSAlert(
-            "Sale completed, but the EdgeSuite receipt did not print. Use Print Receipt to retry.",
+            "Sale completed, but the receipt did not print. Select Print Receipt to retry.",
             "orange"
           );
         });
@@ -522,7 +522,7 @@
       printEdgeSuiteInvoice(invoiceName, { automatic: true }).catch((error) => {
         console.warn("ProcessEdge POS: dialog-triggered EdgeSuite auto-print failed", error);
         showPOSAlert(
-          "Sale completed, but the EdgeSuite receipt did not print. Use Print Receipt to retry.",
+          "Sale completed, but the receipt did not print. Select Print Receipt to retry.",
           "orange"
         );
       });

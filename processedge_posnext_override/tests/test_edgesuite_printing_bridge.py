@@ -178,7 +178,7 @@ def test_edgesuite_auto_print_is_session_deduplicated_and_post_transaction():
     assert "autoPrintedInvoices: new Set()" in source
     assert "STATE.printing.autoPrintedInvoices.has(name)" in source
     assert "STATE.printing.autoPrintedInvoices.add(name)" in source
-    assert "Sale completed, but the EdgeSuite receipt did not print." in source
+    assert "Sale completed, but the receipt did not print." in source
 
 
 def test_offline_printing_remains_posnext_owned():
