@@ -29,12 +29,18 @@ The feature expects:
 Because `/app` and `/pos` share the same origin, EdgeSuite's local printer binding can be
 restored from the POS page after setup.
 
+For an MPT-II Bluetooth serial printer, bind its **outgoing** COM port, perform a
+test print, then select **Disconnect** in Devices & Printing (do not forget
+the printer) before starting POSNext. Two browser tabs cannot assume they can
+open the same serial port simultaneously. Existing local Windows printer driver
+warnings do not by themselves invalidate a tested Web Serial connection.
+
 ## Settings
 
 In **ProcessEdge POSNext Settings**:
 
-- **Enable EdgeSuite Receipt Printing** adds the EdgeSuite receipt path to POS.
-- **Auto-print with EdgeSuite** prints a freshly submitted online Sales Invoice automatically.
+- **Enable Direct Receipt Printing** adds the EdgeSuite receipt path to POS.
+- **Automatically Print Direct Receipts** prints a freshly submitted online Sales Invoice automatically.
 
 Both settings default off.
 
