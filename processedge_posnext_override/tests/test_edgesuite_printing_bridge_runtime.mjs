@@ -13,6 +13,7 @@ const source = await readFile(
 
 let printCount = 0;
 let authMode = "success";
+let configuredPaperWidth = 58;
 const printedDocuments = [];
 let connectedProfile = "Default Receipt";
 let disconnectCount = 0;
@@ -55,8 +56,8 @@ const adapter = {
     },
     receiptOptions() {
       return {
-        paper: 58,
-        charactersPerLine: 32,
+        paper: configuredPaperWidth,
+        charactersPerLine: configuredPaperWidth === 58 ? 32 : 48,
         feedLines: 1,
         copies: 1,
         autoCut: false,
@@ -327,5 +328,13 @@ await assert.rejects(
 );
 assert.equal(printCount, beforeSwitchPrints + 1, "no receipt sent to an unmatched port");
 forceRestoredBindingMismatch = false;
+
+// The same shared backend must preserve the wider paper layout for 80mm
+// profiles and must not collapse all receipts to the 58mm variant.
+configuredPaperWidth = 80;
+await test.printEdgeSuiteInvoice("ACC-SINV-2026-00006");
+const wideJob = printedDocuments.at(-1);
+assert.equal(wideJob.document.paper, 80);
+assert.equal(wideJob.document.blocks[0].text, "80mm receipt");
 
 console.log("Executable POS EdgeSuite printing and session compatibility checks passed.");
