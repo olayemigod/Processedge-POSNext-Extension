@@ -67,3 +67,46 @@ explicitly distinguish a local provisional receipt from a submitted ERPNext rece
 If the printer profile or local device binding is missing, the POS action offers
 **Devices & Printing**. The setup page stores only browser-safe local device identity; the
 server profile stores policy, not browser permissions or Bluetooth device objects.
+
+## Platform baseline and implementation decision (9 November 2026)
+
+- Frappe v16 provides native browser printing, QZ Tray-backed raw ESC/POS printing,
+  and CUPS-backed network printing. ERPNext POS Profile remains the authority for
+  print format and checkout configuration. Do not duplicate those mechanisms.
+  References: https://docs.frappe.io/framework/user/en/printing/raw-and-network-printing
+  and https://docs.frappe.io/erpnext/pos-profile.
+- Web Serial supports Bluetooth SPP/virtual COM-port devices, including paired
+  receipt printers such as MPT-II. It requires a secure browser context, and an
+  initial device selection requires a user gesture. A printer queue reporting
+  "Driver unavailable" does not prevent a separately authorized Web Serial
+  connection. Reference: https://developer.mozilla.org/en-US/docs/Web/API/Web_Serial_API.
+- POSNext's QZ Tray/Windows print path and browser print fallback remain intact.
+  EdgeSuite's shared ESC/POS runtime is preferred only when deliberately enabled
+  and the resolved printer profile supports it. Never auto-print twice.
+- A connected serial port is not enough to establish which printer is active:
+  verify its saved identity against the exact resolved print profile before
+  dispatch, disconnect an unmatched connection, and restore the correct bound port.
+  If identity cannot be proved, fail closed and direct the operator to
+  Devices & Printing. The sale stays submitted and eligible for reprint.
+- The first integration slice supports submitted **online** Sales Invoice receipts.
+  An offline/local POSNext receipt remains on the existing POSNext print path,
+  with a clear provisional status; queued synchronization must not trigger
+  surprise printing after reconnection.
+
+## Release acceptance
+
+1. In EdgeSuite on the same HTTPS origin and cashier browser, bind MPT-II via
+   its outgoing Bluetooth serial port, then complete a physical test print.
+2. With an authorized cashier and matching Company/Branch, print a submitted
+   receipt from POSNext and verify the correct content and paper width.
+3. Bind two different printer profiles and prove an already-connected but
+   mismatched serial port is disconnected and never receives the receipt.
+4. Verify missing profile, missing binding, unsupported browser, and failed
+   physical writes do not change invoice or payment state.
+5. Verify optional auto-print triggers once per fresh online transaction;
+   legacy POSNext auto-print takes precedence, and offline delayed sync
+   does not print automatically.
+6. Verify cashier/manager permission scope, branch-specific receipt routing,
+   reprint, light/dark visibility, and the POSNext browser/QZ fallback.
+7. Deploy only after the exact-head CI and real-device, cashier-persona checks
+   pass on an isolated site; no production changes are implied by this PR.
