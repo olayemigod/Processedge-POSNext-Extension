@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from html.parser import HTMLParser
+
 POS_SESSION_COMPAT_SCRIPT = "/assets/processedge_posnext_override/js/processedge_pos_session_compat.js"
 POS_PAGE_SCRIPT = "/assets/processedge_posnext_override/js/processedge_posnext_override.js"
 EDGE_SUITE_PRINT_ASSET = "edgeui_print.bundle.js"
@@ -29,6 +31,27 @@ def _resolve_edge_suite_print_script() -> str:
     if not resolved:
         return ""
     return resolved if resolved.startswith("/") else f"/{resolved}"
+
+
+class _ScriptSourceCollector(HTMLParser):
+    """Collect actual script src attributes, never inline boot asset references."""
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.sources: set[str] = set()
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag.lower() != "script":
+            return
+        for name, value in attrs:
+            if name.lower() == "src" and value:
+                self.sources.add(value.strip())
+
+
+def _existing_script_sources(html: str) -> set[str]:
+    parser = _ScriptSourceCollector()
+    parser.feed(html)
+    return parser.sources
 
 
 def _script_tag(source: str) -> str:
@@ -73,14 +96,19 @@ def inject_pos_page_script(response=None, request=None):
     if not html:
         return
 
+    # The standalone POS Vite HTML can include the hashed asset path in
+    # inline boot JSON without executing it. Checking source in html
+    # incorrectly treats that string as a loaded script and leaves
+    # window.EdgeSuitePrint undefined even when the bundle is built.
+    loaded_scripts = _existing_script_sources(html)
     sources: list[str] = []
-    if POS_SESSION_COMPAT_SCRIPT not in html:
+    if POS_SESSION_COMPAT_SCRIPT not in loaded_scripts:
         sources.append(POS_SESSION_COMPAT_SCRIPT)
 
     edge_print_script = _resolve_edge_suite_print_script()
-    if edge_print_script and edge_print_script not in html:
+    if edge_print_script and edge_print_script not in loaded_scripts:
         sources.append(edge_print_script)
-    if POS_PAGE_SCRIPT not in html:
+    if POS_PAGE_SCRIPT not in loaded_scripts:
         sources.append(POS_PAGE_SCRIPT)
     if not sources:
         return
