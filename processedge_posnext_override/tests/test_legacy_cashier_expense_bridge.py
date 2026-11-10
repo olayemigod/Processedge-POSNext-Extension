@@ -75,6 +75,17 @@ def test_native_pos_expense_is_captured_before_vue_dialog_opens():
     assert "bindNativePOSExpenseRouting();" in boot_source
 
 
+def test_cashier_shortcut_refreshes_capabilities_after_shift_open_without_page_reload():
+    assert "function refreshCashierExpenseBridge()" in JS_SOURCE
+    assert "await loadCashierExpenseBridge();" in JS_SOURCE
+    assert "injectCashierExpenseAction();" in JS_SOURCE
+    assert "function bindCashierExpenseBridgeRefreshEvents()" in JS_SOURCE
+    assert 'document.addEventListener("visibilitychange"' in JS_SOURCE
+    assert 'window.addEventListener("focus"' in JS_SOURCE
+    assert 'window.setTimeout(() => scheduleCashierExpenseBridgeRefresh(0), 1200)' in JS_SOURCE
+    assert "bindCashierExpenseBridgeRefreshEvents();" in JS_SOURCE
+
+
 def test_cashier_expense_dialog_refreshes_bridge_on_every_open():
     open_start = JS_SOURCE.index("async function openCashierExpenseDialog()")
     open_source = JS_SOURCE[open_start:open_start + 500]
