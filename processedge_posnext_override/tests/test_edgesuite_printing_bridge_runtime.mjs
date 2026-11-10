@@ -19,6 +19,7 @@ let connectedProfile = "Default Receipt";
 let disconnectCount = 0;
 let boundConnectCount = 0;
 let forceRestoredBindingMismatch = false;
+let failSerialOwnershipHandoff = false;
 const adapter = {
   getStatus() {
     return { connected: Boolean(connectedProfile), state: connectedProfile ? "connected" : "disconnected" };
@@ -39,6 +40,11 @@ const adapter = {
     },
     async connectBoundSerial(profileName) {
       boundConnectCount += 1;
+      if (failSerialOwnershipHandoff) {
+        const error = new Error("The receipt printer is being used in another browser tab. Disconnect it there, then try again.");
+        error.code = "SERIAL_TAB_IN_USE";
+        throw error;
+      }
       connectedProfile = profileName;
       return { status: adapter.getStatus() };
     },
@@ -328,6 +334,19 @@ await assert.rejects(
 );
 assert.equal(printCount, beforeSwitchPrints + 1, "no receipt sent to an unmatched port");
 forceRestoredBindingMismatch = false;
+
+// A busy printer in another tab must report a recoverable conflict rather
+// than opening the setup page and starting another competing serial session.
+connectedProfile = null;
+failSerialOwnershipHandoff = true;
+await assert.rejects(
+  test.printEdgeSuiteInvoice("ACC-SINV-2026-00005"),
+  (error) => error?.code === "PROCESS_EDGE_PRINTER_TAB_BUSY"
+    && /another browser tab/.test(error.message)
+    && error.cause?.code === "SERIAL_TAB_IN_USE",
+);
+assert.equal(printCount, beforeSwitchPrints + 1, "blocked handoff must not print");
+failSerialOwnershipHandoff = false;
 
 // The same shared backend must preserve the wider paper layout for 80mm
 // profiles and must not collapse all receipts to the 58mm variant.
