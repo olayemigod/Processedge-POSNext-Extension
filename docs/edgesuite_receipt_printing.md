@@ -29,11 +29,20 @@ The feature expects:
 Because `/app` and `/pos` share the same origin, EdgeSuite's local printer binding can be
 restored from the POS page after setup.
 
-For an MPT-II Bluetooth serial printer, bind its **outgoing** COM port, perform a
-test print, then select **Disconnect** in Devices & Printing (do not forget
-the printer) before starting POSNext. Two browser tabs cannot assume they can
-open the same serial port simultaneously. Existing local Windows printer driver
-warnings do not by themselves invalidate a tested Web Serial connection.
+For an MPT-II Bluetooth serial printer, bind its **outgoing** COM port and perform
+a physical test print. When the tab-coordinated EdgeSuite runtime is installed,
+POSNext requests a safe handoff from an idle Devices & Printing tab; only one
+browser tab owns the serial connection at a time. If the setup tab is actively
+printing or cannot release the port, POSNext displays an actionable busy
+message without starting another connection. On older EdgeSuite installations,
+select **Disconnect** in Devices & Printing (do not forget the printer) and
+close the setup tab before starting POSNext.
+
+Switching browser-tab focus must not disconnect the active printer; a handoff
+occurs only when another tab requests a connection. Cross-tab handoff does not
+override external Windows/phone RFCOMM sessions or permit printing to a
+different Company/Branch printer. Existing Windows printer-driver warnings do
+not by themselves invalidate a tested Web Serial connection.
 
 ## Settings
 
