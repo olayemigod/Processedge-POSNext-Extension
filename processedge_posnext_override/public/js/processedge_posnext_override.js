@@ -261,6 +261,19 @@
       }
       return restored.status;
     } catch (error) {
+      // The shared printing runtime can ask an idle browser tab to hand over
+      // the serial port. If its current owner is printing, report the actual
+      // tab conflict rather than opening another setup tab and competing again.
+      if (
+        error?.code === "SERIAL_TAB_IN_USE" ||
+        error?.code === "SERIAL_TAB_COORDINATION_UNAVAILABLE"
+      ) {
+        throw printError(
+          "PROCESS_EDGE_PRINTER_TAB_BUSY",
+          error.message || "The receipt printer is busy in another browser tab. Disconnect it there and retry.",
+          error
+        );
+      }
       throw printError(
         "PROCESS_EDGE_PRINTER_SETUP_REQUIRED",
         "Connect this device to the correct receipt printer in Devices & Printing.",
