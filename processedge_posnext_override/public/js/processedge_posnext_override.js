@@ -2232,6 +2232,48 @@
     });
   }
 
+
+  let cashierBridgeRefreshInFlight = false;
+  let cashierBridgeRefreshTimer = null;
+
+  async function refreshCashierExpenseBridge() {
+    if (!isPOSPage() || cashierBridgeRefreshInFlight) return;
+    cashierBridgeRefreshInFlight = true;
+    try {
+      await loadCashierExpenseBridge();
+      injectCashierExpenseAction();
+    } finally {
+      cashierBridgeRefreshInFlight = false;
+    }
+  }
+
+  function scheduleCashierExpenseBridgeRefresh(delay = 750) {
+    if (!isPOSPage()) return;
+    if (cashierBridgeRefreshTimer) window.clearTimeout(cashierBridgeRefreshTimer);
+    cashierBridgeRefreshTimer = window.setTimeout(() => {
+      cashierBridgeRefreshTimer = null;
+      void refreshCashierExpenseBridge();
+    }, delay);
+  }
+
+  function bindCashierExpenseBridgeRefreshEvents() {
+    // POSNext's Vite route remains mounted while the user opens a shift.
+    // Capability state loaded during boot may therefore become stale.
+    document.addEventListener("visibilitychange", () => {
+      if (!document.hidden) scheduleCashierExpenseBridgeRefresh(200);
+    });
+    window.addEventListener("focus", () => scheduleCashierExpenseBridgeRefresh(200));
+    document.addEventListener("click", (event) => {
+      const button = event.target?.closest?.("button");
+      if (!button) return;
+      const label = [button.textContent || "", button.getAttribute("title") || "", button.getAttribute("aria-label") || ""].join(" ").trim().toLowerCase();
+      if (!/(open|start|close|end).*shift|shift.*(open|start|close|end)/.test(label)) return;
+      // Allow the POSNext shift API to finish before fetching fresh capabilities.
+      window.setTimeout(() => scheduleCashierExpenseBridgeRefresh(0), 1200);
+      window.setTimeout(() => scheduleCashierExpenseBridgeRefresh(0), 4000);
+    }, true);
+  }
+
   function startObserver() {
     if (STATE.observer) {
       STATE.observer.disconnect();
@@ -2259,6 +2301,7 @@
     patchUI();
     bindNativePOSExpenseRouting();
     bindPaymentBridgeRefreshEvents();
+    bindCashierExpenseBridgeRefreshEvents();
     startObserver();
   }
 
