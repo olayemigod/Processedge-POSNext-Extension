@@ -1,8 +1,9 @@
 name: CI
 
 on:
+  # Stacked feature PRs must run the same checks as PRs into main.
+  # This has no deployment side effects and does not change release authority.
   pull_request:
-    branches: [main]
   push:
     branches: [main]
   workflow_dispatch:
