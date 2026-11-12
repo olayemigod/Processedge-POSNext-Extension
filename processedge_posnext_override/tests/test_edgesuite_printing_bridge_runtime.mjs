@@ -386,6 +386,11 @@ modal.isConnected = true;
 cashHint.textContent = "No sales";
 documentObject.querySelectorAll = () => [modal];
 test.state.closingPreview = null;
+test.patchClosingCashReceivedLabel();
+assert.equal(cashHint.textContent, "",
+  "if the governed cash totals are not yet available, hide the unverified No sales claim");
+assert.equal(bankHint.textContent, "+2,000.00",
+  "unverified cash hint handling must not touch bank methods");
 const previewRequestsBeforeFallback = closingPreviewCalls;
 test.ensureClosingHintFallback();
 test.ensureClosingHintFallback();
