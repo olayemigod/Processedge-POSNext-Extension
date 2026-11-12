@@ -13,6 +13,11 @@ from __future__ import annotations
 
 import frappe
 
+from processedge_posnext_override.eod_print_format_compat import (
+    BROKEN_PROFILE_ADDRESS_LINE,
+    PRINT_FORMAT_NAME,
+)
+
 NATIVE_CLOSING_API = "pos_next.api.shifts.get_closing_shift_data"
 RETAIL_CLOSING_API = (
     "retailedge.pos_cashier_expense.get_posnext_closing_shift_data_with_cashier_expenses"
@@ -78,6 +83,16 @@ def verify():
     assert DRAFT_GUARD in _handlers(events, "before_submit")
     assert callable(frappe.get_attr(DRAFT_GUARD))
 
+    # POSNext v1.17 shipped an EOD Jinja SELECT for POS Profile.address.
+    # Confirm the *real* migrated print format no longer queries that missing
+    # database column; only the vendor EOD format is governed by this repair.
+    assert frappe.db.exists("Print Format", PRINT_FORMAT_NAME), "Missing native EOD print format"
+    if not frappe.db.has_column("POS Profile", "address"):
+        eod_html = frappe.db.get_value("Print Format", PRINT_FORMAT_NAME, "html") or ""
+        assert BROKEN_PROFILE_ADDRESS_LINE not in eod_html, (
+            "EOD print template still queries non-existent POS Profile.address"
+        )
+
     return {
         "installed_apps": sorted(required_apps),
         "closing_override_winner": providers[-1],
@@ -89,5 +104,6 @@ def verify():
         "cash_deposit_fields_verified": True,
         "cashier_expense_validate_registered": True,
         "saved_draft_guard_registered": True,
+        "eod_print_profile_address_safe": True,
         "site_mutations": 0,
     }
