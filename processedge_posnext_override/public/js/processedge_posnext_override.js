@@ -9,6 +9,7 @@
     postingDate: null,
     observer: null,
     closingPreview: null,
+    closingHintFallback: { dialog: null, shiftName: "", timer: null, pending: false },
     lastSubmittedClosingShift: null,
     cashierExpense: {
       bridge: null,
@@ -1573,6 +1574,79 @@
     patchClosingCashReceivedLabel();
   }
 
+
+  function currentPOSOpeningShiftName() {
+    // POSNext stores a nested opening-shift document, not always a plain ID.
+    try {
+      const value = JSON.parse(window.localStorage?.getItem("pos_shift_data") || "null");
+      const opening = value?.pos_opening_shift;
+      return String(
+        typeof opening === "string" ? opening : opening?.name || ""
+      ).trim();
+    } catch (_error) {
+      return "";
+    }
+  }
+
+  function closingDialogNeedsCashHint(dialog) {
+    if (!dialog || !isPOSPage()) return false;
+    const content = String(dialog.textContent || "");
+    if (!content.includes("Close POS Shift") || !content.includes("No sales")) return false;
+    return Array.from(dialog.querySelectorAll("h4")).some(
+      (heading) => /\\bcash\\b/i.test(String(heading.textContent || "")) &&
+        !!heading.closest("div.border.rounded-lg")
+    );
+  }
+
+  function ensureClosingHintFallback() {
+    // frappe-ui createResource may finish rendering before the asynchronous
+    // response clone observer has parsed. Schedule just one scoped read of the
+    // same already-authorized POSNext closing preview if that observer missed.
+    if (STATE.closingPreview || !isPOSPage()) return;
+    const candidates = document.querySelectorAll(
+      '[role="dialog"], .z-dialog-content, .dialog-content, .frappe-dialog'
+    );
+    const dialog = Array.from(candidates).find(closingDialogNeedsCashHint);
+    if (!dialog) return;
+
+    const shiftName = currentPOSOpeningShiftName();
+    if (!shiftName) return;
+    const fallback = STATE.closingHintFallback;
+    if (fallback.dialog === dialog && fallback.shiftName === shiftName) return;
+    if (fallback.timer) window.clearTimeout(fallback.timer);
+    fallback.dialog = dialog;
+    fallback.shiftName = shiftName;
+    fallback.timer = window.setTimeout(async () => {
+      fallback.timer = null;
+      if (STATE.closingPreview || fallback.pending ||
+          !dialog.isConnected || !closingDialogNeedsCashHint(dialog)) return;
+      fallback.pending = true;
+      try {
+        const query = new URLSearchParams({ opening_shift: shiftName });
+        // The backend has the same shift-based permission checks as the
+        // native POSNext preview; never calculate a cashier scope client-side.
+        const response = await window.fetch(
+          `/api/method/${CLOSING_DATA_ENDPOINT}?${query.toString()}`,
+          { method: "GET", credentials: "include", cache: "no-store",
+            headers: { Accept: "application/json" } }
+        );
+        if (!response.ok) return;
+        const payload = await response.json();
+        if (fallback.dialog !== dialog || fallback.shiftName !== shiftName ||
+            !dialog.isConnected) return;
+        const data = payload?.message || payload;
+        const responseShift = String(data?.pos_opening_shift || "").trim();
+        if (responseShift && responseShift !== shiftName) return;
+        STATE.closingPreview = extractAdjustedCashReceipts(payload);
+        patchClosingCashReceivedLabel();
+      } catch (error) {
+        console.warn("ProcessEdge POS: closing hint unavailable", error);
+      } finally {
+        fallback.pending = false;
+      }
+    }, 180);
+  }
+
   function patchFetch() {
     if (!window.fetch || window.fetch.__processedgePosnextPatched || !STATE.settings) {
       return;
@@ -2302,6 +2376,7 @@
 
   function patchUI() {
     patchClosingCashReceivedLabel();
+    ensureClosingHintFallback();
     injectEODBrowserPrintAction();
     injectOptionalCustomerPhoneAction();
     unlockRateInputs();
@@ -2497,6 +2572,8 @@
       isLocalOnlyReceiptName,
       extractAdjustedCashReceipts,
       patchClosingCashReceivedLabel,
+      ensureClosingHintFallback,
+      currentPOSOpeningShiftName,
       patchFetch,
       submittedClosingShiftFromResponse,
       eodBrowserPrintUrl,
