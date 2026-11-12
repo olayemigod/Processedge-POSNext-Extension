@@ -153,6 +153,18 @@ windowObject.fetch = async (url) => {
     }
     return jsonResponse("browser-cashier@example.com");
   }
+  if (text.includes("pos_next.api.shifts.get_closing_shift_data")) {
+    return jsonResponse({
+      pos_opening_shift: "POSA-OS-26-0000009",
+      pos_profile: "Ketu POS Profile",
+      retailedge_cashier_expense_total: 1000,
+      retailedge_cash_deposit_total: 2000,
+      payment_reconciliation: [
+        { mode_of_payment: "Cash", opening_amount: 10000, expected_amount: 10000 },
+        { mode_of_payment: "Bank Draft", opening_amount: 0, expected_amount: 2000 },
+      ],
+    });
+  }
   if (text.includes("get_edgesuite_receipt_print_payload")) {
     return jsonResponse({
       available: 1,
@@ -231,6 +243,66 @@ test.state.settings = {
   company: "RetailEdge Consulting",
   branch: "Ketu",
 };
+
+// POSNext 1.17 renders "No sales" when expenses/deposits reduce net till cash
+// to opening cash. The ProcessEdge bridge must fix copy without changing any
+// amount posted by the authoritative RetailEdge/POSNext closing workflow.
+const cashHint = { textContent: "No sales", title: "" };
+const bankHint = { textContent: "+2,000.00" };
+const cashCard = {
+  querySelectorAll: (selector) => selector === "label"
+    ? [{ textContent: "Expected", parentElement: { querySelector: () => cashHint } }]
+    : [],
+};
+const bankCard = {
+  querySelectorAll: (selector) => selector === "label"
+    ? [{ textContent: "Expected", parentElement: { querySelector: () => bankHint } }]
+    : [],
+};
+const modal = {
+  textContent: "Close POS Shift — Ketu POS Profile",
+  querySelectorAll: (selector) => selector === "h4" ? [
+    { textContent: "Cash", closest: () => cashCard },
+    { textContent: "Bank Draft", closest: () => bankCard },
+  ] : [],
+};
+documentObject.querySelectorAll = () => [modal];
+const closingPayload = {
+  pos_profile: "Ketu POS Profile",
+  payment_reconciliation: [
+    { mode_of_payment: "Cash", opening_amount: 10000, expected_amount: 10000 },
+    { mode_of_payment: "Bank Draft", opening_amount: 0, expected_amount: 2000 },
+  ],
+  retailedge_cashier_expense_total: 1000,
+  retailedge_cash_deposit_total: 2000,
+};
+const originalClosingJSON = JSON.stringify(closingPayload);
+const cashPreview = test.extractAdjustedCashReceipts({ message: closingPayload });
+assert.equal(cashPreview.received, 3000);
+assert.equal(cashPreview.cashMode, "Cash");
+assert.equal(JSON.stringify(closingPayload), originalClosingJSON, "accounting amounts must not be mutated");
+assert.equal(test.extractAdjustedCashReceipts({ message: {
+  ...closingPayload,
+  retailedge_cashier_expense_total: 0,
+  retailedge_cash_deposit_total: 0,
+} }), null, "native POSNext preview must remain native when no till movements exist");
+assert.equal(test.extractAdjustedCashReceipts({ message: {
+  ...closingPayload,
+  payment_reconciliation: [
+    ...closingPayload.payment_reconciliation,
+    { mode_of_payment: "Petty Cash", opening_amount: 0, expected_amount: 0 },
+  ],
+} }), null, "ambiguous cash methods must not be guessed");
+test.patchFetch();
+const closingResponse = await windowObject.fetch("/api/method/pos_next.api.shifts.get_closing_shift_data");
+const nativeData = (await closingResponse.json()).message;
+await new Promise((resolve) => setTimeout(resolve, 15));
+assert.equal(nativeData.payment_reconciliation[0].expected_amount, 10000);
+assert.equal(nativeData.payment_reconciliation[1].expected_amount, 2000);
+assert.match(cashHint.textContent, /\+3,000\.00 cash received/);
+assert.equal(bankHint.textContent, "+2,000.00", "bank draft hint must be unchanged");
+test.patchClosingCashReceivedLabel();
+assert.match(cashHint.textContent, /\+3,000\.00 cash received/, "repeated observation stays idempotent");
 
 const parsedInvoice = test.submittedInvoiceFromResponse({
   message: {
