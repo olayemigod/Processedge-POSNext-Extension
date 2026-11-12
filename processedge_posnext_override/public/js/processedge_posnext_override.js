@@ -1602,7 +1602,7 @@
   function closingDialogNeedsCashHint(dialog) {
     if (!dialog || !isPOSPage()) return false;
     const content = String(dialog.textContent || "");
-    if (!content.includes("Close POS Shift") || !content.includes("No sales")) return false;
+    if (!content.includes("Close POS Shift")) return false;
     return Array.from(dialog.querySelectorAll("h4")).some(
       (heading) => /\bcash\b/i.test(String(heading.textContent || "")) &&
         !!heading.closest("div.border.rounded-lg")
