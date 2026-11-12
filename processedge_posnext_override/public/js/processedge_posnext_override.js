@@ -1529,17 +1529,18 @@
 
   function patchClosingCashReceivedLabel() {
     const snapshot = STATE.closingPreview;
-    if (!snapshot || !isPOSPage()) return;
+    if (!isPOSPage()) return;
     const dialogs = document.querySelectorAll(
       '[role="dialog"], .z-dialog-content, .dialog-content, .frappe-dialog'
     );
     dialogs.forEach((dialog) => {
       const content = dialog.textContent || "";
       if (!content.includes("Close POS Shift") ||
-          (snapshot.posProfile && !content.includes(snapshot.posProfile))) return;
+          (snapshot?.posProfile && !content.includes(snapshot.posProfile))) return;
       const headings = dialog.querySelectorAll("h4");
       headings.forEach((heading) => {
-        if (heading.textContent?.trim() !== snapshot.cashMode) return;
+        const tender = String(heading.textContent || "").trim();
+        if (snapshot ? tender !== snapshot.cashMode : !/\bcash\b/i.test(tender)) return;
         const card = heading.closest("div.border.rounded-lg");
         if (!card) return;
         const expectedLabel = Array.from(card.querySelectorAll("label")).find(
@@ -1549,6 +1550,16 @@
           "div.text-xs span"
         );
         if (!subtitle) return;
+        if (!snapshot) {
+          // Frappe's 'No sales' is derived from net drawer movement, not
+          // submitted sales. Hide an unverified claim rather than mislead.
+          // When the governed preview is available, show the actual amount.
+          if (String(subtitle.textContent || "").trim() === "No sales") {
+            subtitle.textContent = "";
+            subtitle.title = "";
+          }
+          return;
+        }
 
         const amount = Math.abs(snapshot.received).toLocaleString(undefined, {
           minimumFractionDigits: 2,
