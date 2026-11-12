@@ -9,6 +9,7 @@
     postingDate: null,
     observer: null,
     closingPreview: null,
+    lastSubmittedClosingShift: null,
     cashierExpense: {
       bridge: null,
       selectedCategory: null,
@@ -38,6 +39,8 @@
   ]);
   const SUBMIT_INVOICE_ENDPOINT = "pos_next.api.invoices.submit_invoice";
   const CLOSING_DATA_ENDPOINT = "pos_next.api.shifts.get_closing_shift_data";
+  const CLOSING_SUBMIT_ENDPOINT = "pos_next.api.shifts.submit_closing_shift";
+  const EOD_PRINT_FORMAT = "POS Next EOD Report";
   const EDGE_RECEIPT_METHOD =
     "processedge_posnext_override.api.get_edgesuite_receipt_print_payload";
 
@@ -1413,6 +1416,78 @@
   }
 
 
+
+  // POSNext v1.17.0 prints the EOD format through QZ Tray only. An unavailable
+  // QZ runtime must not force the cashier to submit a second closing shift.
+  // Offer Frappe's existing permission-governed browser print route for the
+  // exact already-submitted POS Closing Shift instead.
+  function submittedClosingShiftFromResponse(payload) {
+    const result = payload && typeof payload.message === "object" && payload.message
+      ? payload.message : payload;
+    if (!result || typeof result !== "object" ||
+        (result.status && result.status !== "success")) return "";
+    return String(result.name || "").trim();
+  }
+
+  function eodBrowserPrintUrl(closingShiftName) {
+    const name = String(closingShiftName || "").trim();
+    if (!name) return "";
+    const params = new URLSearchParams({
+      doctype: "POS Closing Shift",
+      name,
+      format: EOD_PRINT_FORMAT,
+      trigger_print: "1",
+    });
+    return `/printview?${params.toString()}`;
+  }
+
+  function injectEODBrowserPrintAction() {
+    const closingShiftName = STATE.lastSubmittedClosingShift;
+    if (!closingShiftName || !isPOSPage()) return;
+    document.querySelectorAll(
+      '[role="dialog"], .z-dialog-content, .dialog-content, .frappe-dialog'
+    ).forEach((dialog) => {
+      const content = String(dialog.textContent || "");
+      if (!content.includes("Close POS Shift") ||
+          !content.includes("EOD report pending print") ||
+          dialog.querySelector("[data-processedge-browser-eod-print]")) return;
+
+      const retry = Array.from(dialog.querySelectorAll("button")).find(
+        (button) => String(button.textContent || "").trim() === "Print EOD Report"
+      );
+      if (!retry || !retry.parentElement) return;
+
+      const button = document.createElement("button");
+      button.type = "button";
+      button.setAttribute("data-processedge-browser-eod-print", "1");
+      button.textContent = "Print EOD in Browser";
+      button.title = "Print the submitted closing report using your browser printer";
+      button.className = "rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-semibold text-gray-900 hover:bg-gray-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2";
+      button.addEventListener("click", () => {
+        // Never call POSNext's submit endpoint from the print fallback.
+        const url = eodBrowserPrintUrl(closingShiftName);
+        if (!url) return;
+        const printTab = window.open(url, "_blank");
+        if (!printTab) {
+          showPOSAlert("Allow pop-ups for this site to print the end-of-day report.", "orange");
+        }
+      });
+      retry.insertAdjacentElement("afterend", button);
+    });
+  }
+
+  async function observeSubmittedClosingShiftResponse(response) {
+    if (!response?.ok || typeof response.clone !== "function") return;
+    let payload;
+    try {
+      payload = await response.clone().json();
+    } catch (_error) {
+      return;
+    }
+    STATE.lastSubmittedClosingShift = submittedClosingShiftFromResponse(payload) || null;
+    injectEODBrowserPrintAction();
+  }
+
   // POSNext v1.17.0 labels (expected - opening) as sales. RetailEdge's
   // governed expense/deposit adjustments change expected cash, so that
   // difference is net movement, not cash received. Presentation-only bridge:
@@ -1524,11 +1599,18 @@
       }
 
       const isClosingPreview = Boolean(url && isPOSPage() && url.includes(CLOSING_DATA_ENDPOINT));
+      const isClosingSubmit = Boolean(url && isPOSPage() && url.includes(CLOSING_SUBMIT_ENDPOINT));
       if (isClosingPreview) STATE.closingPreview = null;
+      if (isClosingSubmit) STATE.lastSubmittedClosingShift = null;
       const response = await originalFetch(input, nextInit);
       if (isClosingPreview) {
         observeClosingShiftResponse(response).catch((error) => {
           console.warn("ProcessEdge POS: closing display observation failed", error);
+        });
+      }
+      if (isClosingSubmit) {
+        observeSubmittedClosingShiftResponse(response).catch((error) => {
+          console.warn("ProcessEdge POS: closing print handoff failed", error);
         });
       }
       if (
@@ -2220,6 +2302,7 @@
 
   function patchUI() {
     patchClosingCashReceivedLabel();
+    injectEODBrowserPrintAction();
     injectOptionalCustomerPhoneAction();
     unlockRateInputs();
     injectCashierExpenseAction();
@@ -2415,6 +2498,9 @@
       extractAdjustedCashReceipts,
       patchClosingCashReceivedLabel,
       patchFetch,
+      submittedClosingShiftFromResponse,
+      eodBrowserPrintUrl,
+      injectEODBrowserPrintAction,
     });
     return;
   }
