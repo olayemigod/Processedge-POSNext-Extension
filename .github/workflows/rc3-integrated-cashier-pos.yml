@@ -169,6 +169,9 @@ jobs:
           for module in \
             retailedge.tests.test_cashier_expense_pos_policy \
             retailedge.tests.test_cash_custody \
+            retailedge.tests.test_cashier_shift_cash_sales_resolution \
+            retailedge.tests.test_cashier_expense_snapshot_refresh \
+            retailedge.tests.test_qa_cashier_shift_runtime_acceptance \
             retailedge.tests.test_persona_effective_permissions \
             retailedge.tests.test_cashier_my_work; do
             bench --site "$QA_SITE" run-tests --app retailedge --module "$module" \
