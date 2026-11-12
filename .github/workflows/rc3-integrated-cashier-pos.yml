@@ -4,6 +4,9 @@ on:
   pull_request:
     branches: [agent/shared-printing-pos-hardening-20261003]
   workflow_dispatch:
+  # Allow the already-registered CI workflow to invoke these exact-site tests
+  # manually without merging this workflow file into the default branch.
+  workflow_call:
 
 concurrency:
   group: rc3-posnext-cross-app-${{ github.event.pull_request.number || github.ref }}
