@@ -46,3 +46,14 @@ jobs:
 
       - name: Build Python package
         run: python -m build
+
+  integrated-site:
+    name: RetailEdge + POSNext disposable-site integration
+    # The PR scheduler was stuck after the incident, so invoke this
+    # explicitly from the known-working, default-branch-registered CI
+    # workflow. Preserve ordinary PR CI as the quick validation gate.
+    if: ${{ github.event_name == 'workflow_dispatch' }}
+    needs: validate
+    uses: ./.github/workflows/rc3-integrated-cashier-pos.yml
+    permissions:
+      contents: read
