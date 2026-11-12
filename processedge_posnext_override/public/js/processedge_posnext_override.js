@@ -8,6 +8,7 @@
     settings: null,
     postingDate: null,
     observer: null,
+    closingPreview: null,
     cashierExpense: {
       bridge: null,
       selectedCategory: null,
@@ -36,6 +37,7 @@
     "pos_next.api.customers.create_customer",
   ]);
   const SUBMIT_INVOICE_ENDPOINT = "pos_next.api.invoices.submit_invoice";
+  const CLOSING_DATA_ENDPOINT = "pos_next.api.shifts.get_closing_shift_data";
   const EDGE_RECEIPT_METHOD =
     "processedge_posnext_override.api.get_edgesuite_receipt_print_payload";
 
@@ -1410,6 +1412,92 @@
     return nextInit;
   }
 
+
+  // POSNext v1.17.0 labels (expected - opening) as sales. RetailEdge's
+  // governed expense/deposit adjustments change expected cash, so that
+  // difference is net movement, not cash received. Presentation-only bridge:
+  // never change the native opening, expected, actual or submission payload.
+  function extractAdjustedCashReceipts(payload) {
+    const data = payload && typeof payload.message === "object" && payload.message
+      ? payload.message
+      : payload;
+    if (!data || !Array.isArray(data.payment_reconciliation)) return null;
+
+    const expenses = Number(data.retailedge_cashier_expense_total || 0);
+    const deposits = Number(data.retailedge_cash_deposit_total || 0);
+    if (!Number.isFinite(expenses) || !Number.isFinite(deposits) ||
+        expenses < 0 || deposits < 0 || expenses + deposits <= 0) return null;
+
+    // Do not guess the mode for ambiguous or custom-labelled tenders.
+    // All other payment modes (for example Bank Draft) remain untouched.
+    const cashRows = data.payment_reconciliation.filter(
+      (row) => /\bcash\b/i.test(String(row?.mode_of_payment || ""))
+    );
+    if (cashRows.length !== 1) return null;
+    const cash = cashRows[0];
+    const expected = Number(cash.expected_amount);
+    const opening = Number(cash.opening_amount);
+    if (!Number.isFinite(expected) || !Number.isFinite(opening)) return null;
+
+    // Reverse ONLY the deductions applied by the modern RetailEdge adapter.
+    // POSNext's underlying tender can include customer receipts/returns, so
+    // 'cash received' is more accurate than claiming all are new sales.
+    const received = expected - opening + expenses + deposits;
+    if (!Number.isFinite(received)) return null;
+    return {
+      posProfile: String(data.pos_profile || ""),
+      cashMode: String(cash.mode_of_payment),
+      received,
+    };
+  }
+
+  function patchClosingCashReceivedLabel() {
+    const snapshot = STATE.closingPreview;
+    if (!snapshot || !isPOSPage()) return;
+    const dialogs = document.querySelectorAll(
+      '[role="dialog"], .z-dialog-content, .dialog-content, .frappe-dialog'
+    );
+    dialogs.forEach((dialog) => {
+      const content = dialog.textContent || "";
+      if (!content.includes("Close POS Shift") ||
+          (snapshot.posProfile && !content.includes(snapshot.posProfile))) return;
+      const headings = dialog.querySelectorAll("h4");
+      headings.forEach((heading) => {
+        if (heading.textContent?.trim() !== snapshot.cashMode) return;
+        const card = heading.closest("div.border.rounded-lg");
+        if (!card) return;
+        const expectedLabel = Array.from(card.querySelectorAll("label")).find(
+          (label) => label.textContent?.trim().toLowerCase() === "expected"
+        );
+        const subtitle = expectedLabel?.parentElement?.querySelector(
+          "div.text-xs span"
+        );
+        if (!subtitle) return;
+
+        const amount = Math.abs(snapshot.received).toLocaleString(undefined, {
+          minimumFractionDigits: 2,
+          maximumFractionDigits: 2,
+        });
+        const sign = snapshot.received > 0 ? "+" : snapshot.received < 0 ? "-" : "";
+        const message = `${sign}${amount} cash received`;
+        if (subtitle.textContent !== message) subtitle.textContent = message;
+        subtitle.title = "Cash received before till expenses and deposits";
+      });
+    });
+  }
+
+  async function observeClosingShiftResponse(response) {
+    if (!response?.ok || typeof response.clone !== "function") return;
+    let payload;
+    try {
+      payload = await response.clone().json();
+    } catch (_error) {
+      return;
+    }
+    STATE.closingPreview = extractAdjustedCashReceipts(payload);
+    patchClosingCashReceivedLabel();
+  }
+
   function patchFetch() {
     if (!window.fetch || window.fetch.__processedgePosnextPatched || !STATE.settings) {
       return;
@@ -1419,10 +1507,8 @@
     const shouldObservePrinting = Boolean(
       STATE.settings.edgesuite_receipt_printing_enabled
     );
-    if (!shouldPatchPostingDate && !shouldObservePrinting) {
-      return;
-    }
-
+    // Closing presentation must be observed even when receipt printing and
+    // posting-date editing are both disabled.
     const originalFetch = window.fetch.bind(window);
     const patched = async function (input, init) {
       const url = typeof input === "string" ? input : input && input.url;
@@ -1437,7 +1523,14 @@
         nextInit = patchRequestPayload(url, init);
       }
 
+      const isClosingPreview = Boolean(url && isPOSPage() && url.includes(CLOSING_DATA_ENDPOINT));
+      if (isClosingPreview) STATE.closingPreview = null;
       const response = await originalFetch(input, nextInit);
+      if (isClosingPreview) {
+        observeClosingShiftResponse(response).catch((error) => {
+          console.warn("ProcessEdge POS: closing display observation failed", error);
+        });
+      }
       if (
         shouldObservePrinting &&
         url &&
@@ -2126,6 +2219,7 @@
   }
 
   function patchUI() {
+    patchClosingCashReceivedLabel();
     injectOptionalCustomerPhoneAction();
     unlockRateInputs();
     injectCashierExpenseAction();
@@ -2318,6 +2412,9 @@
       scheduleDialogEdgeSuiteAutoPrint,
       edgeSuitePrinterSetupUrl,
       isLocalOnlyReceiptName,
+      extractAdjustedCashReceipts,
+      patchClosingCashReceivedLabel,
+      patchFetch,
     });
     return;
   }
