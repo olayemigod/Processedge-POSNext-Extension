@@ -12,6 +12,8 @@ const source = await readFile(
 );
 
 let printCount = 0;
+let closingSubmitCalls = 0;
+const openedBrowserReports = [];
 let authMode = "success";
 let configuredPaperWidth = 58;
 const printedDocuments = [];
@@ -130,7 +132,10 @@ const windowObject = {
   EdgeSuitePrint: adapter,
   setTimeout,
   requestAnimationFrame: (fn) => fn(),
-  open: () => ({}),
+  open: (url, target) => {
+    openedBrowserReports.push({ url, target });
+    return {};
+  },
   confirm: () => false,
 };
 windowObject.fetch = async (url) => {
@@ -152,6 +157,10 @@ windowObject.fetch = async (url) => {
       });
     }
     return jsonResponse("browser-cashier@example.com");
+  }
+  if (text.includes("pos_next.api.shifts.submit_closing_shift")) {
+    closingSubmitCalls += 1;
+    return jsonResponse({ name: "POSA-CS-26-0000009", status: "success" });
   }
   if (text.includes("pos_next.api.shifts.get_closing_shift_data")) {
     return jsonResponse({
@@ -303,6 +312,62 @@ assert.match(cashHint.textContent, /\+3,000\.00 cash received/);
 assert.equal(bankHint.textContent, "+2,000.00", "bank draft hint must be unchanged");
 test.patchClosingCashReceivedLabel();
 assert.match(cashHint.textContent, /\+3,000\.00 cash received/, "repeated observation stays idempotent");
+
+// The native EOD printer uses QZ Tray. A missing QZ installation must leave
+// the submitted shift untouched and offer Frappe's existing /printview route.
+assert.equal(test.submittedClosingShiftFromResponse({ message: {
+  name: "POSA-CS-26-0000009", status: "success",
+} }), "POSA-CS-26-0000009");
+assert.equal(test.submittedClosingShiftFromResponse({ message: {
+  name: "POSA-CS-26-0000009", status: "error",
+} }), "");
+const printViewUrl = test.eodBrowserPrintUrl("POSA-CS-26-0000009");
+const printViewParams = new URLSearchParams(printViewUrl.split("?")[1]);
+assert.equal(printViewParams.get("doctype"), "POS Closing Shift");
+assert.equal(printViewParams.get("name"), "POSA-CS-26-0000009");
+assert.equal(printViewParams.get("format"), "POS Next EOD Report");
+assert.equal(printViewParams.get("trigger_print"), "1");
+assert.equal(test.eodBrowserPrintUrl(""), "");
+
+let injectedEodButton = null;
+const nativeRetry = {
+  textContent: "Print EOD Report",
+  parentElement: {},
+  insertAdjacentElement: (position, button) => {
+    assert.equal(position, "afterend");
+    injectedEodButton = button;
+  },
+};
+const eodModal = {
+  textContent: "Close POS Shift / Ketu POS Profile / EOD report pending print",
+  querySelector: (selector) => selector === "[data-processedge-browser-eod-print]"
+    ? injectedEodButton : null,
+  querySelectorAll: (selector) => selector === "button" ? [nativeRetry] : [],
+};
+documentObject.createElement = () => {
+  const handlers = {};
+  return {
+    type: "",
+    setAttribute() {},
+    addEventListener: (event, callback) => { handlers[event] = callback; },
+    click: () => handlers.click?.(),
+  };
+};
+documentObject.querySelectorAll = () => [eodModal];
+const submitResponse = await windowObject.fetch("/api/method/pos_next.api.shifts.submit_closing_shift");
+assert.equal((await submitResponse.json()).message.status, "success");
+await new Promise((resolve) => setTimeout(resolve, 15));
+assert.ok(injectedEodButton, "browser print action appears after failed QZ print");
+assert.equal(injectedEodButton.textContent, "Print EOD in Browser");
+test.injectEODBrowserPrintAction();
+assert.equal(closingSubmitCalls, 1, "repeated observer must not resubmit the shift");
+const browserPrintCount = openedBrowserReports.length;
+injectedEodButton.click();
+assert.equal(openedBrowserReports.length, browserPrintCount + 1);
+assert.equal(openedBrowserReports.at(-1).target, "_blank");
+assert.equal(openedBrowserReports.at(-1).url, printViewUrl);
+assert.equal(closingSubmitCalls, 1, "browser print never resubmits shift");
+documentObject.querySelectorAll = () => [modal];
 
 const parsedInvoice = test.submittedInvoiceFromResponse({
   message: {
