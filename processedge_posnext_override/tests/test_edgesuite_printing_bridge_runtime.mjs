@@ -13,6 +13,7 @@ const source = await readFile(
 
 let printCount = 0;
 let closingSubmitCalls = 0;
+let closingPreviewCalls = 0;
 const openedBrowserReports = [];
 let authMode = "success";
 let configuredPaperWidth = 58;
@@ -163,6 +164,7 @@ windowObject.fetch = async (url) => {
     return jsonResponse({ name: "POSA-CS-26-0000009", status: "success" });
   }
   if (text.includes("pos_next.api.shifts.get_closing_shift_data")) {
+    closingPreviewCalls += 1;
     return jsonResponse({
       pos_opening_shift: "POSA-OS-26-0000009",
       pos_profile: "Ketu POS Profile",
@@ -368,6 +370,35 @@ assert.equal(openedBrowserReports.at(-1).target, "_blank");
 assert.equal(openedBrowserReports.at(-1).url, printViewUrl);
 assert.equal(closingSubmitCalls, 1, "browser print never resubmits shift");
 documentObject.querySelectorAll = () => [modal];
+
+// Integration regression: even if a native createResource response finished
+// before the observer obtained its payload, the closing dialog must still
+// replace the incorrect cash "No sales" from a scoped, read-only preview.
+// The real POSNext check_opening_shift caches a nested opening-shift document.
+windowObject.localStorage = {
+  getItem(key) {
+    assert.equal(key, "pos_shift_data");
+    return JSON.stringify({ pos_opening_shift: { name: "POSA-OS-26-0000009" } });
+  },
+};
+modal.textContent = "Close POS Shift — Ketu POS Profile — No sales";
+modal.isConnected = true;
+cashHint.textContent = "No sales";
+documentObject.querySelectorAll = () => [modal];
+test.state.closingPreview = null;
+const previewRequestsBeforeFallback = closingPreviewCalls;
+test.ensureClosingHintFallback();
+test.ensureClosingHintFallback();
+await new Promise((resolve) => setTimeout(resolve, 280));
+assert.equal(closingPreviewCalls, previewRequestsBeforeFallback + 1,
+  "one native read per dialog even if the mutation observer runs repeatedly");
+assert.match(cashHint.textContent, /\+3,000\.00 cash received/,
+  "the late-read fallback must repair the real cash label");
+assert.equal(bankHint.textContent, "+2,000.00",
+  "the fallback must not change a different payment method");
+assert.equal(closingSubmitCalls, 1,
+  "the fallback must never call the shift submission endpoint");
+assert.equal(test.currentPOSOpeningShiftName(), "POSA-OS-26-0000009");
 
 const parsedInvoice = test.submittedInvoiceFromResponse({
   message: {
