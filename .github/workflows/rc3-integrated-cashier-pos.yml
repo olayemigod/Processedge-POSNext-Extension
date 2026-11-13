@@ -21,7 +21,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
-      RETAILEDGE_SHA: a3415044da1c665adef3ddfb028e4477fb0a5a9e
+      RETAILEDGE_SHA: 8381ff378f836f7a76d9e4773d2d825e410c280a
       EDGESUITE_SHA: d50920b005da8dcf1bd1e35c1c88be8afedecfbf
       POSNEXT_SHA: 44119bc9efa994bc096b037c3e9597068c9f4e8b
       PAYMENTS_SHA: cca07d9f9392e2ea0e521c5975151db9e4b6c321
@@ -63,7 +63,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           repository: olayemigod/RetailEdge
-          ref: a3415044da1c665adef3ddfb028e4477fb0a5a9e
+          ref: 8381ff378f836f7a76d9e4773d2d825e410c280a
           path: retailedge-source
 
       - name: Check out governed EdgeSuite UI candidate
