@@ -2,7 +2,7 @@ name: RC3 RetailEdge + POSNext Integrated QA
 
 on:
   pull_request:
-    branches: [agent/shared-printing-pos-hardening-20261003]
+    branches: [main]
   workflow_dispatch:
   # Allow the already-registered CI workflow to invoke these exact-site tests
   # manually without merging this workflow file into the default branch.
