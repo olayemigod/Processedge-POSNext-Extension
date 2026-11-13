@@ -1,0 +1,208 @@
+name: RC3 RetailEdge + POSNext Integrated QA
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+  # Allow the already-registered CI workflow to invoke these exact-site tests
+  # manually without merging this workflow file into the default branch.
+  workflow_call:
+
+concurrency:
+  group: rc3-posnext-cross-app-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  isolated-site:
+    name: Exact RetailEdge/POSNext candidate, disposable site
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      RETAILEDGE_SHA: 8e7f3a7c41ce565212fa7b14b4294341ee24db2d
+      EDGESUITE_SHA: d50920b005da8dcf1bd1e35c1c88be8afedecfbf
+      POSNEXT_SHA: 44119bc9efa994bc096b037c3e9597068c9f4e8b
+      PAYMENTS_SHA: cca07d9f9392e2ea0e521c5975151db9e4b6c321
+      EXTENSION_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      QA_SITE: retail-pos-ci.localhost
+
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd="redis-cli ping"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+      mariadb:
+        image: mariadb:11.4
+        env:
+          MARIADB_ROOT_PASSWORD: root
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="healthcheck.sh --connect --innodb_initialized"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+
+    steps:
+      - name: Check out exact POSNext extension candidate
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Verify extension commit custody
+        run: test "$(git rev-parse HEAD)" = "$EXTENSION_SHA"
+
+      - name: Check out tested RetailEdge cash custody candidate
+        uses: actions/checkout@v6
+        with:
+          repository: olayemigod/RetailEdge
+          ref: 8e7f3a7c41ce565212fa7b14b4294341ee24db2d
+          path: retailedge-source
+
+      - name: Check out governed EdgeSuite UI candidate
+        uses: actions/checkout@v6
+        with:
+          repository: olayemigod/processedge-edge-suite-ui
+          ref: d50920b005da8dcf1bd1e35c1c88be8afedecfbf
+          path: edgesuite-ui-source
+
+      - name: Set up Python and Node runtimes
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+
+      - name: Install Frappe runner prerequisites
+        run: bash "$GITHUB_WORKSPACE/retailedge-source/scripts/ci/bootstrap_bench_prerequisites.sh"
+
+      - name: Create disposable Frappe v16 bench
+        run: |
+          bench init \
+            --frappe-branch v16.52.0 \
+            --python "$(command -v python)" \
+            --skip-assets \
+            --skip-redis-config-generation \
+            frappe-bench
+          cd frappe-bench
+          bench set-config -g db_host 127.0.0.1
+          bench set-config -g redis_cache redis://127.0.0.1:6379
+          bench set-config -g redis_queue redis://127.0.0.1:6379
+          bench set-config -g redis_socketio redis://127.0.0.1:6379
+
+      - name: Fetch pinned ERPNext, POSNext, and ProcessEdge app stack
+        working-directory: frappe-bench
+        run: |
+          bench get-app --branch v16.51.1 --skip-assets https://github.com/frappe/erpnext.git
+          bench get-app --branch version-16 --skip-assets https://github.com/frappe/payments.git
+          git -C apps/payments fetch --no-tags --depth=1 upstream "$PAYMENTS_SHA"
+          git -C apps/payments checkout "$PAYMENTS_SHA"
+          bench setup requirements --python payments
+
+          bench get-app --skip-assets "$GITHUB_WORKSPACE/edgesuite-ui-source"
+          bench get-app --branch v1.17.0 --skip-assets https://github.com/BrainWise-DEV/POSNext.git
+          bench get-app --skip-assets "$GITHUB_WORKSPACE/retailedge-source"
+          bench get-app --skip-assets "$GITHUB_WORKSPACE"
+
+          test "$(git -C apps/edgesuite_ui rev-parse HEAD)" = "$EDGESUITE_SHA"
+          test "$(git -C apps/pos_next rev-parse HEAD)" = "$POSNEXT_SHA"
+          test "$(git -C apps/retailedge rev-parse HEAD)" = "$RETAILEDGE_SHA"
+          test "$(git -C apps/processedge_posnext_override rev-parse HEAD)" = "$EXTENSION_SHA"
+
+      - name: Validate dependencies and immutable Frappe platform
+        working-directory: frappe-bench
+        run: |
+          uv pip install --python env/bin/python \
+            -e 'apps/frappe[test]' \
+            -e apps/erpnext \
+            -e apps/payments \
+            -e apps/edgesuite_ui \
+            -e apps/pos_next \
+            -e apps/retailedge \
+            -e apps/processedge_posnext_override
+          uv pip check --python env/bin/python
+          python "$GITHUB_WORKSPACE/retailedge-source/scripts/verify-platform-baseline.py" \
+            --bench . --include-payments
+
+      - name: Install all apps on clean isolated site
+        working-directory: frappe-bench
+        run: |
+          bench new-site "$QA_SITE" \
+            --db-host 127.0.0.1 \
+            --mariadb-root-password root \
+            --admin-password admin \
+            --no-mariadb-socket
+          bench --site "$QA_SITE" install-app payments
+          bench --site "$QA_SITE" install-app erpnext
+          bench --site "$QA_SITE" install-app edgesuite_ui
+          bench --site "$QA_SITE" install-app pos_next
+          bench --site "$QA_SITE" install-app retailedge
+          bench --site "$QA_SITE" install-app processedge_posnext_override
+          bench --site "$QA_SITE" set-config allow_tests true
+          bench --site "$QA_SITE" migrate
+
+      - name: Verify real DocType migrations and cross-app Frappe hook ordering
+        working-directory: frappe-bench
+        run: |
+          bench --site "$QA_SITE" list-apps | tee /tmp/rc3-installed-apps.txt
+          bench --site "$QA_SITE" execute \
+            processedge_posnext_override.tests.rc3_integrated_site_probe.verify \
+            | tee /tmp/rc3-integrated-probe.txt
+
+      - name: Run targeted permission and cash-custody regressions on combined site
+        working-directory: frappe-bench
+        shell: bash
+        env:
+          CI: "Yes"
+        run: |
+          set -euo pipefail
+          for module in \
+            retailedge.tests.test_cashier_expense_pos_policy \
+            retailedge.tests.test_cash_custody \
+            retailedge.tests.test_cashier_shift_cash_sales_resolution \
+            retailedge.tests.test_cashier_expense_snapshot_refresh \
+            retailedge.tests.test_qa_cashier_shift_runtime_acceptance \
+            retailedge.tests.test_persona_effective_permissions \
+            retailedge.tests.test_cashier_my_work; do
+            bench --site "$QA_SITE" run-tests --app retailedge --module "$module" \
+              2>&1 | tee -a /tmp/rc3-integrated-regressions.log
+          done
+
+      - name: Verify cross-app assets can build together
+        working-directory: frappe-bench
+        run: |
+          bench build --app edgesuite_ui
+          bench build --app pos_next
+          bench build --app retailedge
+          bench build --app processedge_posnext_override
+          bench --site "$QA_SITE" migrate
+
+      - name: Re-check migrated hooks after asset build
+        working-directory: frappe-bench
+        run: |
+          bench --site "$QA_SITE" execute \
+            processedge_posnext_override.tests.rc3_integrated_site_probe.verify
+
+      - name: Preserve isolated-site diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rc3-combined-posnext-integration-evidence
+          path: |
+            /tmp/rc3-installed-apps.txt
+            /tmp/rc3-integrated-probe.txt
+            /tmp/rc3-integrated-regressions.log
+            frappe-bench/logs/web.error.log
+            frappe-bench/logs/frappe.log
+          if-no-files-found: ignore
+          retention-days: 7

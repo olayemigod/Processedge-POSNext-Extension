@@ -8,6 +8,9 @@
   "feature_section",
   "allow_editable_selling_price",
   "allow_editing_posting_date",
+  "printing_section",
+  "enable_edgesuite_receipt_printing",
+  "auto_print_edgesuite_receipts",
   "customer_creation_section",
   "require_customer_phone",
   "permission_section",
@@ -34,6 +37,26 @@
    "fieldname": "allow_editing_posting_date",
    "fieldtype": "Check",
    "label": "Allow Editing Posting Date on POS"
+  },
+  {
+   "fieldname": "printing_section",
+   "fieldtype": "Section Break",
+   "label": "Receipt Printing"
+  },
+  {
+   "default": "0",
+   "description": "Use the printer connected in Devices & Printing. Your existing browser and system printing options remain available.",
+   "fieldname": "enable_edgesuite_receipt_printing",
+   "fieldtype": "Check",
+   "label": "Enable Direct Receipt Printing"
+  },
+  {
+   "default": "0",
+   "depends_on": "enable_edgesuite_receipt_printing",
+   "description": "Print receipts automatically after successful online sales when other automatic printing methods are disabled. Offline sales continue using their existing printing method.",
+   "fieldname": "auto_print_edgesuite_receipts",
+   "fieldtype": "Check",
+   "label": "Automatically Print Direct Receipts"
   },
   {
    "fieldname": "customer_creation_section",

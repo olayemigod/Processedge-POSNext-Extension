@@ -1,6 +1,13 @@
 from __future__ import annotations
 
-from processedge_posnext_override.request_hooks import POS_PAGE_SCRIPT, inject_pos_page_script
+from unittest.mock import patch
+
+from processedge_posnext_override.request_hooks import (
+    EDGE_SUITE_PRINT_ASSET,
+    POS_PAGE_SCRIPT,
+    POS_SESSION_COMPAT_SCRIPT,
+    inject_pos_page_script,
+)
 
 
 class DummyRequest:
@@ -27,35 +34,114 @@ class DummyResponse:
         self._body = value
 
 
-def test_injects_bridge_into_pos_html_once():
+def test_injects_session_compat_and_bridge_into_pos_html_once():
     response = DummyResponse()
 
     inject_pos_page_script(response=response, request=DummyRequest())
     inject_pos_page_script(response=response, request=DummyRequest())
 
+    assert response._body.count(POS_SESSION_COMPAT_SCRIPT) == 1
     assert response._body.count(POS_PAGE_SCRIPT) == 1
+    assert response._body.index(POS_SESSION_COMPAT_SCRIPT) < response._body.index(POS_PAGE_SCRIPT)
     assert response._body.index(POS_PAGE_SCRIPT) < response._body.lower().index("</body>")
+
+
+def test_injects_session_compat_before_edgesuite_and_pos_bridge_when_available():
+    response = DummyResponse()
+    resolved = "/assets/edgesuite_ui/dist/js/edgeui_print.bundle.TEST.js"
+
+    with patch(
+        "processedge_posnext_override.request_hooks._resolve_edge_suite_print_script",
+        return_value=resolved,
+    ):
+        inject_pos_page_script(response=response, request=DummyRequest())
+
+    assert EDGE_SUITE_PRINT_ASSET == "edgeui_print.bundle.js"
+    assert response._body.count(POS_SESSION_COMPAT_SCRIPT) == 1
+    assert response._body.count(resolved) == 1
+    assert response._body.count(POS_PAGE_SCRIPT) == 1
+    assert response._body.index(POS_SESSION_COMPAT_SCRIPT) < response._body.index(resolved)
+    assert response._body.index(resolved) < response._body.index(POS_PAGE_SCRIPT)
+
+
+def test_all_pos_runtime_injections_are_independently_idempotent():
+    resolved = "/assets/edgesuite_ui/dist/js/edgeui_print.bundle.TEST.js"
+    response = DummyResponse(
+        body=f"<html><body><script src='{POS_SESSION_COMPAT_SCRIPT}'></script><script src='{POS_PAGE_SCRIPT}'></script></body></html>"
+    )
+
+    with patch(
+        "processedge_posnext_override.request_hooks._resolve_edge_suite_print_script",
+        return_value=resolved,
+    ):
+        inject_pos_page_script(response=response, request=DummyRequest())
+        inject_pos_page_script(response=response, request=DummyRequest())
+
+    assert response._body.count(POS_SESSION_COMPAT_SCRIPT) == 1
+    assert response._body.count(resolved) == 1
+    assert response._body.count(POS_PAGE_SCRIPT) == 1
+
+
+def test_injects_print_script_even_when_path_is_present_only_in_boot_assets_json():
+    """A manifest URL in inline boot JSON is not an executed script tag."""
+    resolved = "/assets/edgesuite_ui/dist/js/edgeui_print.bundle.TEST.js"
+    response = DummyResponse(
+        body=(
+            "<html><body><script>"
+            "window.boot = {assets_json: {'edgeui_print.bundle.js': "
+            f"'{resolved}'}};"
+            "</script><div id='app'></div></body></html>"
+        )
+    )
+
+    with patch(
+        "processedge_posnext_override.request_hooks._resolve_edge_suite_print_script",
+        return_value=resolved,
+    ):
+        inject_pos_page_script(response=response, request=DummyRequest())
+        inject_pos_page_script(response=response, request=DummyRequest())
+
+    assert response._body.count(f'<script src="{resolved}"></script>') == 1
+    assert response._body.index(f'<script src="{resolved}"></script>') < response._body.index(POS_PAGE_SCRIPT)
+
+
+def test_existing_edge_print_script_tag_is_not_duplicated():
+    resolved = "/assets/edgesuite_ui/dist/js/edgeui_print.bundle.TEST.js"
+    response = DummyResponse(body=f"<html><body><script defer src='{resolved}'></script></body></html>")
+
+    with patch(
+        "processedge_posnext_override.request_hooks._resolve_edge_suite_print_script",
+        return_value=resolved,
+    ):
+        inject_pos_page_script(response=response, request=DummyRequest())
+
+    assert response._body.count(resolved) == 1
 
 
 def test_injects_pos_subpaths_but_not_other_pages():
     pos_response = DummyResponse()
     inject_pos_page_script(response=pos_response, request=DummyRequest("/pos/checkout"))
+    assert POS_SESSION_COMPAT_SCRIPT in pos_response._body
     assert POS_PAGE_SCRIPT in pos_response._body
 
     desk_response = DummyResponse()
     inject_pos_page_script(response=desk_response, request=DummyRequest("/app"))
+    assert POS_SESSION_COMPAT_SCRIPT not in desk_response._body
     assert POS_PAGE_SCRIPT not in desk_response._body
 
 
 def test_skips_non_html_non_get_and_error_responses():
     json_response = DummyResponse(mimetype="application/json")
     inject_pos_page_script(response=json_response, request=DummyRequest())
+    assert POS_SESSION_COMPAT_SCRIPT not in json_response._body
     assert POS_PAGE_SCRIPT not in json_response._body
 
     post_response = DummyResponse()
     inject_pos_page_script(response=post_response, request=DummyRequest(method="POST"))
+    assert POS_SESSION_COMPAT_SCRIPT not in post_response._body
     assert POS_PAGE_SCRIPT not in post_response._body
 
     error_response = DummyResponse(status_code=500)
     inject_pos_page_script(response=error_response, request=DummyRequest())
+    assert POS_SESSION_COMPAT_SCRIPT not in error_response._body
     assert POS_PAGE_SCRIPT not in error_response._body

@@ -1,8 +1,9 @@
 name: CI
 
 on:
+  # Stacked feature PRs must run the same checks as PRs into main.
+  # This has no deployment side effects and does not change release authority.
   pull_request:
-    branches: [main]
   push:
     branches: [main]
   workflow_dispatch:
@@ -36,10 +37,23 @@ jobs:
         run: python -m compileall -q processedge_posnext_override
 
       - name: Validate POS runtime JavaScript
-        run: node --check processedge_posnext_override/public/js/processedge_posnext_override.js
+        run: |
+          node --check processedge_posnext_override/public/js/processedge_posnext_override.js
+          node processedge_posnext_override/tests/test_edgesuite_printing_bridge_runtime.mjs
 
       - name: Validate release metadata
-        run: python -m pytest -q processedge_posnext_override/tests/test_release_metadata.py processedge_posnext_override/tests/test_pos_page_injection.py processedge_posnext_override/tests/test_mobile_partial_payment_bridge.py processedge_posnext_override/tests/test_legacy_cashier_expense_bridge.py processedge_posnext_override/tests/test_legacy_cashier_expense_closing.py processedge_posnext_override/tests/test_customer_controls_freeze.py processedge_posnext_override/tests/test_posting_date_payment_dialog.py
+        run: python -m pytest -q processedge_posnext_override/tests/test_release_metadata.py processedge_posnext_override/tests/test_pos_page_injection.py processedge_posnext_override/tests/test_mobile_partial_payment_bridge.py processedge_posnext_override/tests/test_legacy_cashier_expense_bridge.py processedge_posnext_override/tests/test_legacy_cashier_expense_closing.py processedge_posnext_override/tests/test_modern_cash_custody_delegation.py processedge_posnext_override/tests/test_closing_saved_draft_safety.py processedge_posnext_override/tests/test_customer_controls_freeze.py processedge_posnext_override/tests/test_posting_date_payment_dialog.py processedge_posnext_override/tests/test_edgesuite_printing_bridge.py processedge_posnext_override/tests/test_eod_print_format_compat.py
 
       - name: Build Python package
         run: python -m build
+
+  integrated-site:
+    name: RetailEdge + POSNext disposable-site integration
+    # The PR scheduler was stuck after the incident, so invoke this
+    # explicitly from the known-working, default-branch-registered CI
+    # workflow. Preserve ordinary PR CI as the quick validation gate.
+    if: ${{ github.event_name == 'workflow_dispatch' }}
+    needs: validate
+    uses: ./.github/workflows/rc3-integrated-cashier-pos.yml
+    permissions:
+      contents: read

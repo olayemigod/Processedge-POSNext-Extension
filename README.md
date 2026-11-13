@@ -99,6 +99,39 @@ The POS modal performs bounded server-side Expense Category search and sends a u
 - Retry the same request ID and confirm no duplicate expense is created.
 - Confirm POS closing reflects the submitted/disbursed RetailEdge till expense exactly once.
 
+## Saved sales during shift closing
+
+POSNext v1.17.0 has an optional `POS Profile.posa_allow_delete` setting that
+deletes **unprinted draft Sales Invoices** linked to a POS opening shift when
+that shift is submitted as closed. The native operation checks Sales Invoice
+Delete permission; giving every cashier Delete access to make closing work is
+not an acceptable workaround.
+
+The ProcessEdge extension now installs a `POS Closing Shift.before_submit`
+safety check. If automatic draft deletion is enabled and the shift still has
+unprinted saved sales, closing stops before POSNext's deletion routine runs.
+The operator must finish those sales, or an authorised manager may disable
+automatic draft deletion in the POS Profile so the saved drafts remain
+untouched while the shift closes. Retaining old-shift drafts does not
+automatically transfer them to a new shift; confirm the applicable
+sale-resumption and accounting policy on the test site.
+
+Acceptance requires both paths:
+
+- Automatic deletion enabled and unprinted drafts present: close is refused
+  before any saved draft is removed, even for a cashier without Delete.
+- Automatic deletion disabled: close does not attempt to remove those drafts;
+  verify shift and invoice lifecycle through the native POSNext engine.
+- No qualifying drafts: normal authorised closing proceeds.
+- An unauthorised user cannot submit the closing shift through the API.
+- A submitted deposit and disbursed till expense appear exactly once in the
+  preview and final reconciliation, with no historical ledger changes.
+
+**Important:** POSNext's v1.17.0 `get_closing_shift_data` also calls
+`submit_printed_invoices` while building the preview. Treat testing that
+endpoint as potentially transactional: use an isolated test site and
+controlled fixture invoices, not production for exploratory acceptance.
+
 ## POS Closing Variance vs Expenses Report
 
 The report compares submitted POSNext `POS Closing Shift` variances with net expense GL entries for the same posting date and company. If an `Expense Cost Center` filter is not selected, the report uses the POS Profile cost center when that field exists.

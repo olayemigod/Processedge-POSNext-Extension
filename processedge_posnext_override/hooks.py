@@ -41,6 +41,9 @@ doc_events = {
     "Sales Invoice": {
         "validate": "processedge_posnext_override.overrides.sales_invoice.validate_pos_invoice_posting_date",
     },
+    "POS Closing Shift": {
+        "before_submit": "processedge_posnext_override.overrides.closing_draft_safety.prevent_unprinted_draft_deletion_on_close",
+    },
 }
 
 override_whitelisted_methods = {

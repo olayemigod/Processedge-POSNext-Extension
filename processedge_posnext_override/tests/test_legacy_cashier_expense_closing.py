@@ -23,6 +23,16 @@ def test_legacy_only_adapter_stands_down_for_modern_retailedge():
     assert "or _has_modern_retailedge_pos_expense_bridge()" in SOURCE
 
 
+def test_modern_retailedge_is_the_single_cash_custody_closing_authority():
+    # When extension wins Frappe override ordering it must explicitly delegate
+    # to RetailEdge rather than returning raw POSNext expected cash.
+    assert "if _has_modern_retailedge_pos_expense_bridge():" in SOURCE
+    assert "from retailedge.pos_cashier_expense import apply_retailedge_cashier_expenses_to_closing_data" in SOURCE
+    assert "return apply_retailedge_cashier_expenses_to_closing_data(" in SOURCE
+    assert "closing_data, opening_shift=opening_shift" in SOURCE
+    assert "return apply_legacy_retailedge_expenses(closing_data, opening_shift)" in SOURCE
+
+
 def test_only_submitted_legacy_expenses_are_counted():
     assert '"linked_pos_opening_shift": opening_shift' in SOURCE
     assert '"docstatus": 1' in SOURCE

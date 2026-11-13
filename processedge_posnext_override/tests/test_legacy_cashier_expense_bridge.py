@@ -48,9 +48,13 @@ def test_modern_retailedge_still_has_priority_when_available():
 
 
 def test_pos_modal_remains_extension_owned_and_edgesuite_free():
-    assert "async function openCashierExpenseDialog()" in JS_SOURCE
-    assert 'document.createElement("div")' in JS_SOURCE
-    assert "window.EdgeSuiteUI" not in JS_SOURCE
+    modal_start = JS_SOURCE.index("async function openCashierExpenseDialog()")
+    modal_end = JS_SOURCE.find("\n  function ", modal_start)
+    modal_source = JS_SOURCE[modal_start:modal_end if modal_end >= 0 else None]
+
+    assert 'document.createElement("div")' in modal_source
+    assert "window.EdgeSuiteUI" not in modal_source
+    assert "window.EdgeSuitePrint" not in modal_source
 
 
 def test_legacy_submit_can_use_active_pos_shift_operational_authorization():
@@ -69,6 +73,17 @@ def test_native_pos_expense_is_captured_before_vue_dialog_opens():
     boot_start = JS_SOURCE.index("async function boot()")
     boot_source = JS_SOURCE[boot_start:]
     assert "bindNativePOSExpenseRouting();" in boot_source
+
+
+def test_cashier_shortcut_refreshes_capabilities_after_shift_open_without_page_reload():
+    assert "function refreshCashierExpenseBridge()" in JS_SOURCE
+    assert "await loadCashierExpenseBridge();" in JS_SOURCE
+    assert "injectCashierExpenseAction();" in JS_SOURCE
+    assert "function bindCashierExpenseBridgeRefreshEvents()" in JS_SOURCE
+    assert 'document.addEventListener("visibilitychange"' in JS_SOURCE
+    assert 'window.addEventListener("focus"' in JS_SOURCE
+    assert 'window.setTimeout(() => scheduleCashierExpenseBridgeRefresh(0), 1200)' in JS_SOURCE
+    assert "bindCashierExpenseBridgeRefreshEvents();" in JS_SOURCE
 
 
 def test_cashier_expense_dialog_refreshes_bridge_on_every_open():

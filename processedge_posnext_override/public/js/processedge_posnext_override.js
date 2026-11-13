@@ -8,11 +8,20 @@
     settings: null,
     postingDate: null,
     observer: null,
+    closingPreview: null,
+    closingHintFallback: { dialog: null, shiftName: "", timer: null, pending: false },
+    lastSubmittedClosingShift: null,
     cashierExpense: {
       bridge: null,
       selectedCategory: null,
       requestId: null,
       searchTimer: null,
+    },
+    printing: {
+      lastSubmittedInvoice: null,
+      autoPrintedInvoices: new Set(),
+      autoPrintInFlightInvoices: new Set(),
+      busy: false,
     },
   };
 
@@ -29,6 +38,12 @@
     "processedge_posnext_override.api.create_retailedge_cashier_expense",
     "pos_next.api.customers.create_customer",
   ]);
+  const SUBMIT_INVOICE_ENDPOINT = "pos_next.api.invoices.submit_invoice";
+  const CLOSING_DATA_ENDPOINT = "pos_next.api.shifts.get_closing_shift_data";
+  const CLOSING_SUBMIT_ENDPOINT = "pos_next.api.shifts.submit_closing_shift";
+  const EOD_PRINT_FORMAT = "POS Next EOD Report";
+  const EDGE_RECEIPT_METHOD =
+    "processedge_posnext_override.api.get_edgesuite_receipt_print_payload";
 
   function apiArgs(args) {
     const params = new URLSearchParams();
@@ -134,11 +149,584 @@
         allow_editing_posting_date: 0,
         require_customer_phone: 1,
         native_customer_phone_policy: 0,
+        edgesuite_receipt_printing_enabled: 0,
+        edgesuite_auto_print_requested: 0,
+        edgesuite_auto_print_effective: 0,
+        edgesuite_printing_available: 0,
+        edgesuite_printing_reason: "",
+        posnext_native_auto_print: 0,
+        posnext_silent_print: 0,
+        company: "",
+        branch: "",
       };
       STATE.postingDate = getToday();
     }
   }
 
+
+  function sharedPrintAdapter() {
+    return (
+      window.EdgeSuitePrint ||
+      window.EdgeSuiteUI?.print ||
+      window.EdgeSuiteUI?.getAdapter?.("print") ||
+      null
+    );
+  }
+
+  function edgeSuitePrintingEnabled() {
+    return Boolean(
+      STATE.settings &&
+        Number(STATE.settings.edgesuite_receipt_printing_enabled || 0) &&
+        Number(STATE.settings.edgesuite_printing_available || 0)
+    );
+  }
+
+  function edgeSuiteAutoPrintEnabled() {
+    return Boolean(
+      edgeSuitePrintingEnabled() &&
+        Number(STATE.settings.edgesuite_auto_print_effective || 0)
+    );
+  }
+
+  function edgeSuitePrinterSetupUrl(context = {}) {
+    const params = new URLSearchParams({
+      purpose: "Receipt",
+      product_key: "retailedge",
+    });
+    const company = String(context.company || STATE.settings?.company || "").trim();
+    const branch = String(context.branch || STATE.settings?.branch || "").trim();
+    if (company) params.set("company", company);
+    if (branch) params.set("branch", branch);
+    return `/app/edge-printing?${params.toString()}`;
+  }
+
+  function openEdgeSuitePrinterSetup(context = {}) {
+    const url = edgeSuitePrinterSetupUrl(context);
+    const opened = window.open(url, "_blank", "noopener,noreferrer");
+    if (!opened) {
+      showPOSAlert("Open Devices & Printing in Business Setup.", "orange");
+      return false;
+    }
+    return true;
+  }
+
+  function printError(code, message, cause) {
+    const error = new Error(message);
+    error.code = code;
+    if (cause) error.cause = cause;
+    return error;
+  }
+
+  async function ensureEdgeSuitePrinter(adapter, profile) {
+    if (!adapter?.devices || !adapter?.profiles || typeof adapter.printReceipt !== "function") {
+      throw printError(
+        "PROCESS_EDGE_PRINT_RUNTIME_UNAVAILABLE",
+        "The shared receipt printer is not available on this POS page."
+      );
+    }
+    if (!profile || profile.transport !== "serial") {
+      throw printError(
+        "PROCESS_EDGE_SERIAL_PROFILE_REQUIRED",
+        "Direct receipt printing requires a configured serial receipt printer."
+      );
+    }
+
+    // The serial connection is shared across receipt profiles. A connected
+    // port may belong to another terminal/branch printer; never print to it
+    // solely because its connection state is "connected".
+    const status = adapter.getStatus?.("serial");
+    if (
+      status?.connected &&
+      adapter.devices.bindingMatchesStatus?.(profile.name, status)
+    ) {
+      return status;
+    }
+
+    try {
+      if (status?.connected) {
+        if (typeof adapter.disconnect !== "function") {
+          throw new Error("The existing printer connection cannot be switched safely.");
+        }
+        await adapter.disconnect("serial");
+      }
+
+      const restored = await adapter.devices.connectBoundSerial(
+        profile.name,
+        adapter.profiles.connectionOptions(profile)
+      );
+      // Fail closed if the shared runtime cannot prove which saved printer
+      // was restored. Never dispatch a customer's receipt to a different port.
+      if (
+        !restored?.status?.connected ||
+        !adapter.devices.bindingMatchesStatus?.(profile.name, restored.status)
+      ) {
+        if (restored?.status?.connected && typeof adapter.disconnect === "function") {
+          await adapter.disconnect("serial");
+        }
+        throw new Error("The connected printer does not match this receipt profile.");
+      }
+      return restored.status;
+    } catch (error) {
+      // The shared printing runtime can ask an idle browser tab to hand over
+      // the serial port. If its current owner is printing, report the actual
+      // tab conflict rather than opening another setup tab and competing again.
+      if (
+        error?.code === "SERIAL_TAB_IN_USE" ||
+        error?.code === "SERIAL_TAB_COORDINATION_UNAVAILABLE"
+      ) {
+        throw printError(
+          "PROCESS_EDGE_PRINTER_TAB_BUSY",
+          error.message || "The receipt printer is busy in another browser tab. Disconnect it there and retry.",
+          error
+        );
+      }
+      throw printError(
+        "PROCESS_EDGE_PRINTER_SETUP_REQUIRED",
+        "Connect this device to the correct receipt printer in Devices & Printing.",
+        error
+      );
+    }
+  }
+
+  function buildEdgeSuiteReceiptDocument(receipt, options, profile) {
+    // RetailEdge supplies preformatted 58mm and 80mm layouts. The default
+    // receipt.blocks is the 80mm variant and must not be sent to a 58mm printer.
+    const paperWidth = String(Number(options.paper || 80));
+    const paperBlocks = receipt?.blocks_by_paper?.[paperWidth];
+    const sourceBlocks = Array.isArray(paperBlocks)
+      ? paperBlocks
+      : Array.isArray(receipt?.blocks)
+        ? receipt.blocks
+        : [];
+    const blocks = sourceBlocks
+      .filter((block) => options.printQr || block?.type !== "qr")
+      .map((block) => ({ ...block }));
+
+    if (Number(options.feedLines || 0) > 0) {
+      blocks.push({ type: "feed", lines: Number(options.feedLines) });
+    }
+    if (options.autoCut) {
+      blocks.push({ type: "cut", mode: options.cutMode || "partial" });
+    }
+
+    return {
+      paper: options.paper,
+      charactersPerLine: options.charactersPerLine,
+      blocks,
+      metadata: {
+        ...(receipt?.metadata || {}),
+        product: "retailedge",
+        source: "posnext_extension",
+        profile: profile.name,
+        template: receipt?.template_variants?.[paperWidth] || receipt?.template_family || "",
+        paper_width: options.paper,
+      },
+    };
+  }
+
+  async function printEdgeSuiteInvoice(invoiceName, { automatic = false } = {}) {
+    const name = String(invoiceName || "").trim();
+    if (!name) throw new TypeError("Submitted Sales Invoice name is required.");
+    if (!edgeSuitePrintingEnabled()) {
+      throw printError(
+        "PROCESS_EDGE_PRINTING_DISABLED",
+        STATE.settings?.edgesuite_printing_reason ||
+          "Direct receipt printing is not enabled for this register."
+      );
+    }
+    if (
+      automatic &&
+      (STATE.printing.autoPrintedInvoices.has(name) ||
+        STATE.printing.autoPrintInFlightInvoices.has(name))
+    ) {
+      return { printed: false, duplicate: true, name };
+    }
+
+    const adapter = sharedPrintAdapter();
+    if (!adapter) {
+      throw printError(
+        "PROCESS_EDGE_PRINT_RUNTIME_UNAVAILABLE",
+        "The receipt printer connection is unavailable. Refresh this page and try again."
+      );
+    }
+
+    STATE.printing.busy = true;
+    if (automatic) STATE.printing.autoPrintInFlightInvoices.add(name);
+    try {
+      const payload = await callAPI(EDGE_RECEIPT_METHOD, { invoice_name: name });
+      if (!payload?.available) {
+        throw printError(
+          "PROCESS_EDGE_PRINTING_UNAVAILABLE",
+          payload?.reason || "Shared receipt printing is unavailable on this site."
+        );
+      }
+      if (!payload?.profile) {
+        throw printError(
+          "PROCESS_EDGE_PRINTER_PROFILE_REQUIRED",
+          payload?.reason || "No receipt printer profile matches this sale."
+        );
+      }
+      if (!payload?.receipt) {
+        throw printError(
+          "PROCESS_EDGE_RECEIPT_UNAVAILABLE",
+          "The receipt could not be prepared. Check the invoice and try again."
+        );
+      }
+
+      const profile = adapter.profiles.normalize(payload.profile);
+      await ensureEdgeSuitePrinter(adapter, profile);
+      const options = adapter.profiles.receiptOptions(profile);
+      const documentPayload = buildEdgeSuiteReceiptDocument(
+        payload.receipt,
+        options,
+        profile
+      );
+      const copies = Math.max(1, Number(options.copies || 1));
+      const results = [];
+      const encodeText = adapter.profiles.textEncoder(profile);
+      for (let copy = 0; copy < copies; copy += 1) {
+        results.push(await adapter.printReceipt(documentPayload, { encodeText }));
+      }
+
+      if (automatic) STATE.printing.autoPrintedInvoices.add(name);
+      showPOSAlert(
+        `Receipt ${name} printed${copies > 1 ? ` (${copies} copies)` : ""}.`,
+        "green"
+      );
+      return { printed: true, name, copies, results, profile };
+    } finally {
+      if (automatic) STATE.printing.autoPrintInFlightInvoices.delete(name);
+      STATE.printing.busy = false;
+    }
+  }
+
+  function submittedInvoiceFromResponse(payload) {
+    const result =
+      payload &&
+      typeof payload === "object" &&
+      Object.prototype.hasOwnProperty.call(payload, "message") &&
+      payload.message &&
+      typeof payload.message === "object"
+        ? payload.message
+        : payload && typeof payload === "object"
+          ? payload
+          : {};
+
+    const name = String(result?.name || "").trim();
+    if (!name) return null;
+    return {
+      name,
+      doctype: String(result?.doctype || "Sales Invoice"),
+      company: String(result?.company || ""),
+      branch: String(result?.branch || ""),
+    };
+  }
+
+  function structuredValueContainsOfflineId(value) {
+    if (!value) return false;
+    if (typeof value === "object") {
+      if (
+        Object.prototype.hasOwnProperty.call(value, "offline_id") &&
+        String(value.offline_id || "").trim()
+      ) {
+        return true;
+      }
+      return Object.values(value).some((entry) =>
+        structuredValueContainsOfflineId(entry)
+      );
+    }
+    if (typeof value !== "string") return false;
+
+    const text = value.trim();
+    if (!text) return false;
+    if (text.startsWith("{") || text.startsWith("[")) {
+      try {
+        return structuredValueContainsOfflineId(JSON.parse(text));
+      } catch (_error) {
+        return false;
+      }
+    }
+    return false;
+  }
+
+  function requestContainsOfflineInvoice(init) {
+    const body = init?.body;
+    if (!body) return false;
+
+    if (typeof URLSearchParams !== "undefined" && body instanceof URLSearchParams) {
+      if (String(body.get("offline_id") || "").trim()) return true;
+      return Array.from(body.values()).some((value) =>
+        structuredValueContainsOfflineId(value)
+      );
+    }
+    if (typeof FormData !== "undefined" && body instanceof FormData) {
+      if (String(body.get("offline_id") || "").trim()) return true;
+      let found = false;
+      body.forEach((value) => {
+        if (!found && structuredValueContainsOfflineId(value)) found = true;
+      });
+      return found;
+    }
+    if (typeof body === "string") {
+      const text = body.trim();
+      if (!text) return false;
+      try {
+        const params = new URLSearchParams(text);
+        if (String(params.get("offline_id") || "").trim()) return true;
+        if (
+          Array.from(params.values()).some((value) =>
+            structuredValueContainsOfflineId(value)
+          )
+        ) {
+          return true;
+        }
+      } catch (_error) {
+        // Fall through to raw JSON parsing.
+      }
+      return structuredValueContainsOfflineId(text);
+    }
+    return structuredValueContainsOfflineId(body);
+  }
+
+  async function observeSubmittedInvoiceResponse(url, response) {
+    if (
+      !edgeSuitePrintingEnabled() ||
+      !url?.includes(SUBMIT_INVOICE_ENDPOINT) ||
+      !response?.ok ||
+      typeof response.clone !== "function"
+    ) {
+      return;
+    }
+
+    let payload = null;
+    try {
+      payload = await response.clone().json();
+    } catch (_error) {
+      return;
+    }
+    const invoice = submittedInvoiceFromResponse(payload);
+    if (!invoice || invoice.doctype !== "Sales Invoice") return;
+
+    STATE.printing.lastSubmittedInvoice = invoice;
+    if (edgeSuiteAutoPrintEnabled()) {
+      window.setTimeout(() => {
+        printEdgeSuiteInvoice(invoice.name, { automatic: true }).catch((error) => {
+          console.warn("ProcessEdge POS: EdgeSuite auto-print failed", error);
+          showPOSAlert(
+            "Sale completed, but the receipt did not print. Select Print Receipt to retry.",
+            "orange"
+          );
+        });
+      }, 0);
+    }
+  }
+
+  function isLocalOnlyReceiptName(name) {
+    return /^pos_offline_/i.test(String(name || "").trim());
+  }
+
+  function scheduleDialogEdgeSuiteAutoPrint(name) {
+    const invoiceName = String(name || "").trim();
+    if (
+      !invoiceName ||
+      isLocalOnlyReceiptName(invoiceName) ||
+      !edgeSuiteAutoPrintEnabled() ||
+      STATE.printing.autoPrintedInvoices.has(invoiceName) ||
+      STATE.printing.autoPrintInFlightInvoices.has(invoiceName)
+    ) {
+      return;
+    }
+
+    window.setTimeout(() => {
+      printEdgeSuiteInvoice(invoiceName, { automatic: true }).catch((error) => {
+        console.warn("ProcessEdge POS: dialog-triggered EdgeSuite auto-print failed", error);
+        showPOSAlert(
+          "Sale completed, but the receipt did not print. Select Print Receipt to retry.",
+          "orange"
+        );
+      });
+    }, 0);
+  }
+
+  function successDialogInvoiceName(dialog) {
+    const remembered = String(STATE.printing.lastSubmittedInvoice?.name || "").trim();
+    if (remembered) return remembered;
+    const text = String(dialog?.textContent || "");
+    const match = text.match(/Invoice\s+([^\s]+)\s+created successfully/i);
+    return match?.[1] || "";
+  }
+
+  function injectEdgeSuiteReceiptAction() {
+    if (!edgeSuitePrintingEnabled()) return;
+
+    const rememberedName = String(STATE.printing.lastSubmittedInvoice?.name || "").trim();
+    const dialogs = Array.from(
+      document.querySelectorAll("[role='dialog'], .dialog-content, .frappe-dialog, .z-dialog-content")
+    ).filter((dialog) => {
+      const text = String(dialog.textContent || "");
+      return rememberedName
+        ? text.includes(rememberedName)
+        : /Invoice\s+.+\s+created successfully/i.test(text);
+    });
+
+    dialogs.forEach((dialog) => {
+      const dialogInvoiceName = successDialogInvoiceName(dialog);
+      scheduleDialogEdgeSuiteAutoPrint(dialogInvoiceName);
+
+      if (dialog.querySelector("[data-processedge-edgesuite-print-receipt]")) return;
+
+      const dialogButtons = Array.from(dialog.querySelectorAll("button"));
+      let nativePrint = dialogButtons.find((button) =>
+        /Print Invoice/i.test(String(button.textContent || ""))
+      );
+      if (!nativePrint && rememberedName) {
+        const actionGroups = Array.from(dialog.querySelectorAll("div")).filter(
+          (node) =>
+            node.classList?.contains("flex") &&
+            node.classList?.contains("gap-2") &&
+            node.querySelectorAll("button").length >= 2
+        );
+        nativePrint = Array.from(actionGroups.at(-1)?.querySelectorAll("button") || []).at(-1) || null;
+      }
+
+      const actions = nativePrint?.parentElement;
+      if (!actions) return;
+
+      const button = document.createElement("button");
+      button.type = "button";
+      button.setAttribute("data-processedge-edgesuite-print-receipt", "1");
+      button.textContent = "Print Receipt";
+      button.className = nativePrint.className || "";
+      button.style.cssText =
+        "min-height:36px;border-radius:8px;padding:8px 14px;font-weight:700;cursor:pointer;";
+      button.addEventListener("click", async () => {
+        const name = successDialogInvoiceName(dialog);
+        if (!name || STATE.printing.busy) return;
+        button.disabled = true;
+        const previous = button.textContent;
+        button.textContent = "Printing...";
+        try {
+          await printEdgeSuiteInvoice(name);
+        } catch (error) {
+          console.warn("ProcessEdge POS: EdgeSuite receipt print failed", error);
+          const setupRequired = [
+            "PROCESS_EDGE_PRINT_RUNTIME_UNAVAILABLE",
+            "PROCESS_EDGE_SERIAL_PROFILE_REQUIRED",
+            "PROCESS_EDGE_PRINTER_SETUP_REQUIRED",
+            "PROCESS_EDGE_PRINTER_PROFILE_REQUIRED",
+          ].includes(error?.code);
+          showPOSAlert(error?.message || "Unable to print receipt.", "orange");
+          if (setupRequired && window.confirm("Open Devices & Printing now?")) {
+            openEdgeSuitePrinterSetup();
+          }
+        } finally {
+          button.disabled = false;
+          button.textContent = previous;
+        }
+      });
+
+      actions.insertBefore(button, nativePrint);
+    });
+  }
+
+  function removeEdgeSuitePrinterActions() {
+    document
+      .querySelectorAll("[data-processedge-printer-action]")
+      .forEach((node) => node.remove());
+  }
+
+  function edgeSuitePrinterConnected() {
+    try {
+      return Boolean(sharedPrintAdapter()?.getStatus?.("serial")?.connected);
+    } catch (_error) {
+      return false;
+    }
+  }
+
+  function createPrinterActionButton(mode = "header") {
+    const connected = edgeSuitePrinterConnected();
+    const button = document.createElement("button");
+    button.type = "button";
+    button.setAttribute("data-processedge-printer-action", mode);
+    button.setAttribute("aria-label", connected ? "Receipt Printer Connected" : "Receipt Printer Setup");
+    button.title = connected ? "Receipt Printer — Connected" : "Receipt Printer — Setup";
+    button.style.cssText = [
+      "display:inline-flex",
+      "align-items:center",
+      "justify-content:center",
+      "width:40px",
+      "height:40px",
+      "min-width:40px",
+      "border:1px solid " + (connected ? "#86efac" : "#bfdbfe"),
+      "border-radius:10px",
+      "background:" + (connected ? "#f0fdf4" : "#eff6ff"),
+      "color:" + (connected ? "#15803d" : "#1d4ed8"),
+      "cursor:pointer",
+      "flex-shrink:0",
+    ].join(";");
+    button.innerHTML = [
+      '<svg width="19" height="19" fill="none" stroke="currentColor" viewBox="0 0 24 24">',
+      '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 9V4h12v5M6 18h12v2H6v-2z"></path>',
+      '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 16H4a2 2 0 01-2-2v-3a2 2 0 012-2h16a2 2 0 012 2v3a2 2 0 01-2 2h-2M8 13h8v5H8v-5z"></path>',
+      "</svg>",
+    ].join("");
+    button.addEventListener("click", () => {
+      openEdgeSuitePrinterSetup({
+        company: STATE.settings?.company || "",
+        branch: STATE.settings?.branch || "",
+      });
+    });
+    return button;
+  }
+
+  function injectEdgeSuitePrinterAction() {
+    if (!edgeSuitePrintingEnabled()) {
+      removeEdgeSuitePrinterActions();
+      return;
+    }
+
+    const connected = edgeSuitePrinterConnected();
+    document.querySelectorAll("[data-processedge-printer-action]").forEach((button) => {
+      const isConnectedLabel = button.title === "Receipt Printer — Connected";
+      if (isConnectedLabel !== connected) button.remove();
+    });
+
+    const sidebar = Array.from(document.querySelectorAll("div")).find((node) => {
+      if (!node.classList || !node.classList.contains("w-16")) return false;
+      if (!node.classList.contains("lg:flex")) return false;
+      return node.querySelectorAll("button").length >= 4;
+    });
+
+    if (sidebar && !sidebar.querySelector("[data-processedge-printer-action='sidebar']")) {
+      const button = createPrinterActionButton("sidebar");
+      button.className =
+        "w-12 h-12 rounded-lg flex items-center justify-center transition-all relative group";
+      const settingsButton = Array.from(sidebar.querySelectorAll("button")).find((item) =>
+        String(item.getAttribute("title") || "").toLowerCase().includes("setting")
+      );
+      if (settingsButton) sidebar.insertBefore(button, settingsButton);
+      else sidebar.appendChild(button);
+    }
+
+    const posButton = document.querySelector(
+      "button[title='POS Next'], button[aria-label='POS Next']"
+    );
+    const header = posButton?.closest(".sticky");
+    if (
+      (!sidebar || window.innerWidth < 1024) &&
+      header &&
+      !header.querySelector("[data-processedge-printer-action='header']")
+    ) {
+      const mainRow = Array.from(header.querySelectorAll("div")).find((node) => {
+        const classes = node.classList;
+        return classes && classes.contains("flex-1") && classes.contains("justify-between");
+      });
+      const rightControls = mainRow?.children?.[1];
+      if (rightControls) {
+        rightControls.insertBefore(createPrinterActionButton("header"), rightControls.firstChild || null);
+      }
+    }
+  }
 
   async function loadCashierExpenseBridge() {
     try {
@@ -828,23 +1416,300 @@
     return nextInit;
   }
 
+
+
+  // POSNext v1.17.0 prints the EOD format through QZ Tray only. An unavailable
+  // QZ runtime must not force the cashier to submit a second closing shift.
+  // Offer Frappe's existing permission-governed browser print route for the
+  // exact already-submitted POS Closing Shift instead.
+  function submittedClosingShiftFromResponse(payload) {
+    const result = payload && typeof payload.message === "object" && payload.message
+      ? payload.message : payload;
+    if (!result || typeof result !== "object" ||
+        (result.status && result.status !== "success")) return "";
+    return String(result.name || "").trim();
+  }
+
+  function eodBrowserPrintUrl(closingShiftName) {
+    const name = String(closingShiftName || "").trim();
+    if (!name) return "";
+    const params = new URLSearchParams({
+      doctype: "POS Closing Shift",
+      name,
+      format: EOD_PRINT_FORMAT,
+      trigger_print: "1",
+    });
+    return `/printview?${params.toString()}`;
+  }
+
+  function injectEODBrowserPrintAction() {
+    const closingShiftName = STATE.lastSubmittedClosingShift;
+    if (!closingShiftName || !isPOSPage()) return;
+    document.querySelectorAll(
+      '[role="dialog"], .z-dialog-content, .dialog-content, .frappe-dialog'
+    ).forEach((dialog) => {
+      const content = String(dialog.textContent || "");
+      if (!content.includes("Close POS Shift") ||
+          !content.includes("EOD report pending print") ||
+          dialog.querySelector("[data-processedge-browser-eod-print]")) return;
+
+      const retry = Array.from(dialog.querySelectorAll("button")).find(
+        (button) => String(button.textContent || "").trim() === "Print EOD Report"
+      );
+      if (!retry || !retry.parentElement) return;
+
+      const button = document.createElement("button");
+      button.type = "button";
+      button.setAttribute("data-processedge-browser-eod-print", "1");
+      button.textContent = "Print EOD in Browser";
+      button.title = "Print the submitted closing report using your browser printer";
+      button.className = "rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-semibold text-gray-900 hover:bg-gray-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2";
+      button.addEventListener("click", () => {
+        // Never call POSNext's submit endpoint from the print fallback.
+        const url = eodBrowserPrintUrl(closingShiftName);
+        if (!url) return;
+        const printTab = window.open(url, "_blank");
+        if (!printTab) {
+          showPOSAlert("Allow pop-ups for this site to print the end-of-day report.", "orange");
+        }
+      });
+      retry.insertAdjacentElement("afterend", button);
+    });
+  }
+
+  async function observeSubmittedClosingShiftResponse(response) {
+    if (!response?.ok || typeof response.clone !== "function") return;
+    let payload;
+    try {
+      payload = await response.clone().json();
+    } catch (_error) {
+      return;
+    }
+    STATE.lastSubmittedClosingShift = submittedClosingShiftFromResponse(payload) || null;
+    injectEODBrowserPrintAction();
+  }
+
+  // POSNext v1.17.0 labels (expected - opening) as sales. RetailEdge's
+  // governed expense/deposit adjustments change expected cash, so that
+  // difference is net movement, not cash received. Presentation-only bridge:
+  // never change the native opening, expected, actual or submission payload.
+  function extractAdjustedCashReceipts(payload) {
+    const data = payload && typeof payload.message === "object" && payload.message
+      ? payload.message
+      : payload;
+    if (!data || !Array.isArray(data.payment_reconciliation)) return null;
+
+    const expenses = Number(data.retailedge_cashier_expense_total || 0);
+    const deposits = Number(data.retailedge_cash_deposit_total || 0);
+    if (!Number.isFinite(expenses) || !Number.isFinite(deposits) ||
+        expenses < 0 || deposits < 0 || expenses + deposits <= 0) return null;
+
+    // Do not guess the mode for ambiguous or custom-labelled tenders.
+    // All other payment modes (for example Bank Draft) remain untouched.
+    const cashRows = data.payment_reconciliation.filter(
+      (row) => /\bcash\b/i.test(String(row?.mode_of_payment || ""))
+    );
+    if (cashRows.length !== 1) return null;
+    const cash = cashRows[0];
+    const expected = Number(cash.expected_amount);
+    const opening = Number(cash.opening_amount);
+    if (!Number.isFinite(expected) || !Number.isFinite(opening)) return null;
+
+    // Reverse ONLY the deductions applied by the modern RetailEdge adapter.
+    // POSNext's underlying tender can include customer receipts/returns, so
+    // 'cash received' is more accurate than claiming all are new sales.
+    const received = expected - opening + expenses + deposits;
+    if (!Number.isFinite(received)) return null;
+    return {
+      posProfile: String(data.pos_profile || ""),
+      cashMode: String(cash.mode_of_payment),
+      received,
+    };
+  }
+
+  function patchClosingCashReceivedLabel() {
+    const snapshot = STATE.closingPreview;
+    if (!isPOSPage()) return;
+    const dialogs = document.querySelectorAll(
+      '[role="dialog"], .z-dialog-content, .dialog-content, .frappe-dialog'
+    );
+    dialogs.forEach((dialog) => {
+      const content = dialog.textContent || "";
+      if (!content.includes("Close POS Shift") ||
+          (snapshot?.posProfile && !content.includes(snapshot.posProfile))) return;
+      const headings = dialog.querySelectorAll("h4");
+      headings.forEach((heading) => {
+        const tender = String(heading.textContent || "").trim();
+        if (snapshot ? tender !== snapshot.cashMode : !/\bcash\b/i.test(tender)) return;
+        const card = heading.closest("div.border.rounded-lg");
+        if (!card) return;
+        const expectedLabel = Array.from(card.querySelectorAll("label")).find(
+          (label) => label.textContent?.trim().toLowerCase() === "expected"
+        );
+        const subtitle = expectedLabel?.parentElement?.querySelector(
+          "div.text-xs span"
+        );
+        if (!subtitle) return;
+        if (!snapshot) {
+          // Frappe's 'No sales' is derived from net drawer movement, not
+          // submitted sales. Hide an unverified claim rather than mislead.
+          // When the governed preview is available, show the actual amount.
+          if (String(subtitle.textContent || "").trim() === "No sales") {
+            subtitle.textContent = "";
+            subtitle.title = "";
+          }
+          return;
+        }
+
+        const amount = Math.abs(snapshot.received).toLocaleString(undefined, {
+          minimumFractionDigits: 2,
+          maximumFractionDigits: 2,
+        });
+        const sign = snapshot.received > 0 ? "+" : snapshot.received < 0 ? "-" : "";
+        const message = `${sign}${amount} cash received`;
+        if (subtitle.textContent !== message) subtitle.textContent = message;
+        subtitle.title = "Cash received before till expenses and deposits";
+      });
+    });
+  }
+
+  async function observeClosingShiftResponse(response) {
+    if (!response?.ok || typeof response.clone !== "function") return;
+    let payload;
+    try {
+      payload = await response.clone().json();
+    } catch (_error) {
+      return;
+    }
+    STATE.closingPreview = extractAdjustedCashReceipts(payload);
+    patchClosingCashReceivedLabel();
+  }
+
+
+  function currentPOSOpeningShiftName() {
+    // POSNext stores a nested opening-shift document, not always a plain ID.
+    try {
+      const value = JSON.parse(window.localStorage?.getItem("pos_shift_data") || "null");
+      const opening = value?.pos_opening_shift;
+      return String(
+        typeof opening === "string" ? opening : opening?.name || ""
+      ).trim();
+    } catch (_error) {
+      return "";
+    }
+  }
+
+  function closingDialogNeedsCashHint(dialog) {
+    if (!dialog || !isPOSPage()) return false;
+    const content = String(dialog.textContent || "");
+    if (!content.includes("Close POS Shift")) return false;
+    return Array.from(dialog.querySelectorAll("h4")).some(
+      (heading) => /\bcash\b/i.test(String(heading.textContent || "")) &&
+        !!heading.closest("div.border.rounded-lg")
+    );
+  }
+
+  function ensureClosingHintFallback() {
+    // frappe-ui createResource may finish rendering before the asynchronous
+    // response clone observer has parsed. Schedule just one scoped read of the
+    // same already-authorized POSNext closing preview if that observer missed.
+    if (STATE.closingPreview || !isPOSPage()) return;
+    const candidates = document.querySelectorAll(
+      '[role="dialog"], .z-dialog-content, .dialog-content, .frappe-dialog'
+    );
+    const dialog = Array.from(candidates).find(closingDialogNeedsCashHint);
+    if (!dialog) return;
+
+    const shiftName = currentPOSOpeningShiftName();
+    if (!shiftName) return;
+    const fallback = STATE.closingHintFallback;
+    if (fallback.dialog === dialog && fallback.shiftName === shiftName) return;
+    if (fallback.timer) window.clearTimeout(fallback.timer);
+    fallback.dialog = dialog;
+    fallback.shiftName = shiftName;
+    fallback.timer = window.setTimeout(async () => {
+      fallback.timer = null;
+      if (STATE.closingPreview || fallback.pending ||
+          !dialog.isConnected || !closingDialogNeedsCashHint(dialog)) return;
+      fallback.pending = true;
+      try {
+        const query = new URLSearchParams({ opening_shift: shiftName });
+        // The backend has the same shift-based permission checks as the
+        // native POSNext preview; never calculate a cashier scope client-side.
+        const response = await window.fetch(
+          `/api/method/${CLOSING_DATA_ENDPOINT}?${query.toString()}`,
+          { method: "GET", credentials: "include", cache: "no-store",
+            headers: { Accept: "application/json" } }
+        );
+        if (!response.ok) return;
+        const payload = await response.json();
+        if (fallback.dialog !== dialog || fallback.shiftName !== shiftName ||
+            !dialog.isConnected) return;
+        const data = payload?.message || payload;
+        const responseShift = String(data?.pos_opening_shift || "").trim();
+        if (responseShift && responseShift !== shiftName) return;
+        STATE.closingPreview = extractAdjustedCashReceipts(payload);
+        patchClosingCashReceivedLabel();
+      } catch (error) {
+        console.warn("ProcessEdge POS: closing hint unavailable", error);
+      } finally {
+        fallback.pending = false;
+      }
+    }, 180);
+  }
+
   function patchFetch() {
-    if (
-      !window.fetch ||
-      window.fetch.__processedgePosnextPatched ||
-      !STATE.settings ||
-      !STATE.settings.allow_editing_posting_date
-    ) {
+    if (!window.fetch || window.fetch.__processedgePosnextPatched || !STATE.settings) {
       return;
     }
 
+    const shouldPatchPostingDate = Boolean(STATE.settings.allow_editing_posting_date);
+    const shouldObservePrinting = Boolean(
+      STATE.settings.edgesuite_receipt_printing_enabled
+    );
+    // Closing presentation must be observed even when receipt printing and
+    // posting-date editing are both disabled.
     const originalFetch = window.fetch.bind(window);
-    const patched = function (input, init) {
+    const patched = async function (input, init) {
       const url = typeof input === "string" ? input : input && input.url;
-      if (url && isPOSPage() && invoicePatchField(url)) {
-        init = patchRequestPayload(url, init);
+      let nextInit = init;
+
+      if (
+        shouldPatchPostingDate &&
+        url &&
+        isPOSPage() &&
+        invoicePatchField(url)
+      ) {
+        nextInit = patchRequestPayload(url, init);
       }
-      return originalFetch(input, init);
+
+      const isClosingPreview = Boolean(url && isPOSPage() && url.includes(CLOSING_DATA_ENDPOINT));
+      const isClosingSubmit = Boolean(url && isPOSPage() && url.includes(CLOSING_SUBMIT_ENDPOINT));
+      if (isClosingPreview) STATE.closingPreview = null;
+      if (isClosingSubmit) STATE.lastSubmittedClosingShift = null;
+      const response = await originalFetch(input, nextInit);
+      if (isClosingPreview) {
+        observeClosingShiftResponse(response).catch((error) => {
+          console.warn("ProcessEdge POS: closing display observation failed", error);
+        });
+      }
+      if (isClosingSubmit) {
+        observeSubmittedClosingShiftResponse(response).catch((error) => {
+          console.warn("ProcessEdge POS: closing print handoff failed", error);
+        });
+      }
+      if (
+        shouldObservePrinting &&
+        url &&
+        isPOSPage() &&
+        url.includes(SUBMIT_INVOICE_ENDPOINT) &&
+        !requestContainsOfflineInvoice(nextInit)
+      ) {
+        observeSubmittedInvoiceResponse(url, response).catch((error) => {
+          console.warn("ProcessEdge POS: submit print observation failed", error);
+        });
+      }
+      return response;
     };
 
     patched.__processedgePosnextPatched = true;
@@ -1521,10 +2386,15 @@
   }
 
   function patchUI() {
+    patchClosingCashReceivedLabel();
+    ensureClosingHintFallback();
+    injectEODBrowserPrintAction();
     injectOptionalCustomerPhoneAction();
     unlockRateInputs();
     injectCashierExpenseAction();
     injectMobilePartialPaymentAction();
+    injectEdgeSuiteReceiptAction();
+    injectEdgeSuitePrinterAction();
 
     if (!STATE.settings || !STATE.settings.allow_editing_posting_date) {
       return;
@@ -1625,6 +2495,48 @@
     });
   }
 
+
+  let cashierBridgeRefreshInFlight = false;
+  let cashierBridgeRefreshTimer = null;
+
+  async function refreshCashierExpenseBridge() {
+    if (!isPOSPage() || cashierBridgeRefreshInFlight) return;
+    cashierBridgeRefreshInFlight = true;
+    try {
+      await loadCashierExpenseBridge();
+      injectCashierExpenseAction();
+    } finally {
+      cashierBridgeRefreshInFlight = false;
+    }
+  }
+
+  function scheduleCashierExpenseBridgeRefresh(delay = 750) {
+    if (!isPOSPage()) return;
+    if (cashierBridgeRefreshTimer) window.clearTimeout(cashierBridgeRefreshTimer);
+    cashierBridgeRefreshTimer = window.setTimeout(() => {
+      cashierBridgeRefreshTimer = null;
+      void refreshCashierExpenseBridge();
+    }, delay);
+  }
+
+  function bindCashierExpenseBridgeRefreshEvents() {
+    // POSNext's Vite route remains mounted while the user opens a shift.
+    // Capability state loaded during boot may therefore become stale.
+    document.addEventListener("visibilitychange", () => {
+      if (!document.hidden) scheduleCashierExpenseBridgeRefresh(200);
+    });
+    window.addEventListener("focus", () => scheduleCashierExpenseBridgeRefresh(200));
+    document.addEventListener("click", (event) => {
+      const button = event.target?.closest?.("button");
+      if (!button) return;
+      const label = [button.textContent || "", button.getAttribute("title") || "", button.getAttribute("aria-label") || ""].join(" ").trim().toLowerCase();
+      if (!/(open|start|close|end).*shift|shift.*(open|start|close|end)/.test(label)) return;
+      // Allow the POSNext shift API to finish before fetching fresh capabilities.
+      window.setTimeout(() => scheduleCashierExpenseBridgeRefresh(0), 1200);
+      window.setTimeout(() => scheduleCashierExpenseBridgeRefresh(0), 4000);
+    }, true);
+  }
+
   function startObserver() {
     if (STATE.observer) {
       STATE.observer.disconnect();
@@ -1652,7 +2564,33 @@
     patchUI();
     bindNativePOSExpenseRouting();
     bindPaymentBridgeRefreshEvents();
+    bindCashierExpenseBridgeRefreshEvents();
     startObserver();
+  }
+
+  if (
+    window.__PROCESS_EDGE_POSNEXT_TEST_MODE__ &&
+    window.location.hostname === "processedge-test.invalid"
+  ) {
+    window.__ProcessEdgePOSNextPrintingTest = Object.freeze({
+      state: STATE,
+      submittedInvoiceFromResponse,
+      requestContainsOfflineInvoice,
+      printEdgeSuiteInvoice,
+      observeSubmittedInvoiceResponse,
+      scheduleDialogEdgeSuiteAutoPrint,
+      edgeSuitePrinterSetupUrl,
+      isLocalOnlyReceiptName,
+      extractAdjustedCashReceipts,
+      patchClosingCashReceivedLabel,
+      ensureClosingHintFallback,
+      currentPOSOpeningShiftName,
+      patchFetch,
+      submittedClosingShiftFromResponse,
+      eodBrowserPrintUrl,
+      injectEODBrowserPrintAction,
+    });
+    return;
   }
 
   if (document.readyState === "loading") {

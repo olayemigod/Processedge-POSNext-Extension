@@ -154,4 +154,16 @@ def get_closing_shift_data(opening_shift):
     from pos_next.api.shifts import get_closing_shift_data as posnext_get_closing_shift_data
 
     closing_data = posnext_get_closing_shift_data(opening_shift)
+
+    # Both RetailEdge and this extension register the same Frappe override.
+    # When this extension is the last hook, delegate modern cash custody
+    # adjustments directly to RetailEdge rather than returning raw POSNext
+    # numbers. Never invoke the overridden endpoint recursively.
+    if _has_modern_retailedge_pos_expense_bridge():
+        from retailedge.pos_cashier_expense import apply_retailedge_cashier_expenses_to_closing_data
+
+        return apply_retailedge_cashier_expenses_to_closing_data(
+            closing_data, opening_shift=opening_shift
+        )
+
     return apply_legacy_retailedge_expenses(closing_data, opening_shift)
