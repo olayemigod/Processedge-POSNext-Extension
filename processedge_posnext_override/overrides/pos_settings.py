@@ -198,6 +198,7 @@ def extend_bootstrap_settings(settings, pos_profile=None):
     settings["require_customer_phone"] = get_app_flags()["require_customer_phone"]
 
 
+@frappe.whitelist()
 def get_pos_settings_override(pos_profile):
     from pos_next.pos_next.doctype.pos_settings.pos_settings import get_pos_settings
 
