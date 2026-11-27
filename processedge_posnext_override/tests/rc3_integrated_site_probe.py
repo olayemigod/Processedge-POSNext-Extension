@@ -78,6 +78,15 @@ def verify():
     for path in (NATIVE_CLOSING_API, RETAIL_CLOSING_API, EXTENSION_CLOSING_API):
         assert callable(frappe.get_attr(path)), f"Missing native or extension provider: {path}"
 
+    native_settings_api = "pos_next.pos_next.doctype.pos_settings.pos_settings.get_pos_settings"
+    settings_override_api = (
+        "processedge_posnext_override.overrides.pos_settings.get_pos_settings_override"
+    )
+    assert frappe.override_whitelisted_method(native_settings_api) == settings_override_api
+    settings_method = frappe.get_attr(settings_override_api)
+    assert settings_method in frappe.whitelisted
+    assert settings_method not in frappe.guest_methods
+
     events = frappe.get_hooks("doc_events")
     assert CLOSING_VALIDATE in _handlers(events, "validate")
     assert DRAFT_GUARD in _handlers(events, "before_submit")
@@ -105,5 +114,6 @@ def verify():
         "cashier_expense_validate_registered": True,
         "saved_draft_guard_registered": True,
         "eod_print_profile_address_safe": True,
+        "pos_settings_authenticated_rpc_verified": True,
         "site_mutations": 0,
     }
