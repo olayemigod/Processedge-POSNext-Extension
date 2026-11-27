@@ -240,3 +240,22 @@ def test_optional_customer_phone_runtime_contract():
     assert r'replace(/\*/g, "")' in js
     assert r'replace(/\\*/g, "")' not in js
     assert 'component.emit("customer-created", customer)' in js
+
+
+
+def test_pos_settings_override_is_authenticated_rpc():
+    import ast
+
+    path = ROOT / "processedge_posnext_override" / "overrides" / "pos_settings.py"
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    fn = next(node for node in tree.body if isinstance(node, ast.FunctionDef)
+              and node.name == "get_pos_settings_override")
+
+    # The native whitelisted endpoint is resolved through the hook before
+    # Frappe checks the replacement callable. Keep the native auth contract.
+    assert any(ast.unparse(decorator) == "frappe.whitelist()"
+               for decorator in fn.decorator_list)
+
+    # Delegate to native profile access checks before reading extension policy.
+    calls = [ast.unparse(stmt) for stmt in fn.body]
+    assert calls[1] == "settings = get_pos_settings(pos_profile)"
